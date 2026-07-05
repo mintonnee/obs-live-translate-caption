@@ -38,7 +38,7 @@
     },
     "name": "obs-live-translate",
     "displayName": "Gemini Live Translate for OBS",
-    "version": "0.1.5",
+    "version": "0.1.6",
     "author": "Only26k",
     "website": "https://github.com/weisunglee/obs-live-translate",
     "email": "https://github.com/weisunglee/obs-live-translate/issues"
