@@ -1,4 +1,5 @@
 #include "audio-pacing.hpp"
+#include "output-delay.hpp"
 #include "translation-session.hpp"
 #include <atomic>
 #include <chrono>
@@ -13,6 +14,7 @@ namespace {
 constexpr uint32_t kOutputSampleRate = 24000;
 constexpr size_t kDrainCapBytes = 9600;        // 200 ms of 24 kHz mono S16
 constexpr uint32_t kWaitTimeoutMs = 100;
+constexpr uint16_t kOutputBytesPerFrame = sizeof(int16_t);
 // Scheduling lead cap. Diagnostics showed the model delivers audio every ~250 ms
 // and pauses up to ~600 ms at phrase boundaries (never longer). Buffering 600 ms
 // ahead lets OBS play through those pauses so live playback stays continuous
@@ -27,6 +29,8 @@ struct SourceData {
     std::thread thread;
     std::atomic<bool> active{false};
     lt::OutputTimestamper timestamper{kOutputSampleRate, kMaxLeadNs};
+    lt::OutputDelayBuffer delay{0};
+    uint32_t delay_ms = 0;
 };
 
 const char *source_get_name(void *)
@@ -67,14 +71,27 @@ void push_loop(SourceData *d)
             continue;
         }
 
-        if (session.take_interrupted())
+        if (session.take_interrupted()) {
             d->timestamper.reset();
+            d->delay.reset();
+        }
 
         size_t n = session.wait_and_read_output(buf.data(), buf.size(),
                                                 kWaitTimeoutMs);
         if (n < sizeof(int16_t))
             continue;
-        size_t frames = n / sizeof(int16_t);
+        uint32_t delay_ms = session.output_delay_ms();
+        if (delay_ms != d->delay_ms) {
+            d->delay_ms = delay_ms;
+            d->delay.set_delay_bytes(lt::output_delay_bytes(
+                delay_ms, kOutputSampleRate, kOutputBytesPerFrame));
+            d->timestamper.reset();
+        }
+
+        std::vector<uint8_t> delayed = d->delay.push(buf.data(), n);
+        if (delayed.size() < sizeof(int16_t))
+            continue;
+        size_t frames = delayed.size() / sizeof(int16_t);
 
         uint64_t now = os_gettime_ns();
         uint64_t ts = d->timestamper.next_timestamp(now, frames);
@@ -87,7 +104,7 @@ void push_loop(SourceData *d)
             std::this_thread::sleep_for(std::chrono::nanoseconds(delay));
 
         struct obs_source_audio out = {};
-        out.data[0] = buf.data();
+        out.data[0] = delayed.data();
         out.frames = static_cast<uint32_t>(frames);
         out.speakers = SPEAKERS_MONO;
         out.format = AUDIO_FORMAT_16BIT;

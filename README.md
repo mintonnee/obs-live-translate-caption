@@ -29,8 +29,8 @@ The plugin registers two OBS sources:
    3200-byte chunks), and streams it **continuously** to Gemini over a TLS
    WebSocket — including the silence during pauses, which the model relies on to
    detect when an utterance ends and emit its translation promptly. Configure
-   your **API key**, **target language**, and the **echo** option in its
-   properties.
+   your **API key**, **target language**, **echo** option, and optional
+   **playback delay** in its properties.
 
 2. **Gemini Translated Audio** *(audio source)* — add it to your scene on its own
    audio track. It receives the 24 kHz translated PCM from Gemini and pushes it
@@ -85,6 +85,8 @@ Released for **Windows, macOS and Linux** — grab a prebuilt package from the
 - ✅ Optional **echo** toggle (default on): output speech even when it is already
   in the target language. With it off, input already in the target language
   stays silent.
+- ✅ Optional **playback delay** (0-30 seconds): hold the translated audio stream
+  so every translated phrase plays later by the configured amount.
 - ✅ Sentence endings play in full — streaming the mic continuously (silence
   included) lets the model detect when an utterance ends and emit it promptly,
   instead of holding it until the next one starts.
@@ -125,8 +127,9 @@ OBS closed**:
 
 1. Add the **Gemini Live Translate** filter to your microphone source
    (right-click the mic → *Filters* → **+** → *Gemini Live Translate*). Paste your
-   API key, pick a target language, and leave **echo** on. Once it connects the
-   status reads *Connected*.
+   API key, pick a target language, leave **echo** on, and optionally set
+   **Playback Delay (seconds)** from 0 to 30. Once it connects the status reads
+   *Connected*.
 
    ![Gemini Live Translate filter properties](screenshots/micro-filters.png)
 
@@ -139,7 +142,7 @@ OBS closed**:
 ## Remote control (OBS WebSocket)
 
 The filter's settings are plain OBS source settings, so you can change the
-**target language** and **echo** option live from any OBS WebSocket v5 client
+**target language**, **echo** option, and **playback delay** live from any OBS WebSocket v5 client
 (scripts, [`obs-cli`](https://github.com/muesli/obs-cli), Advanced Scene
 Switcher, your own app) using the `SetSourceFilterSettings` request — no extra
 plugin support needed:
@@ -156,6 +159,7 @@ plugin support needed:
 |---|---|---|
 | `target_lang` | string | BCP-47 code from [`src/languages.hpp`](src/languages.hpp) (e.g. `en`, `zh`, `ja`, `pt-BR`) — the value, not the display name |
 | `echo_target` | bool | output speech even when the input is already in the target language |
+| `playback_delay` | number | seconds to delay the translated audio stream, clamped to 0-30 |
 | `api_key` | string | Gemini API key (rarely sent remotely; clearing it stops the session) |
 
 Notes:

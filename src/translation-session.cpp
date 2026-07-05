@@ -111,6 +111,16 @@ bool TranslationSession::output_owned_by_other(const void *token)
     return output_owner_.owned_by_other(token);
 }
 
+void TranslationSession::set_output_delay_ms(uint32_t delay_ms)
+{
+    output_delay_ms_.store(delay_ms, std::memory_order_relaxed);
+}
+
+uint32_t TranslationSession::output_delay_ms() const
+{
+    return output_delay_ms_.load(std::memory_order_relaxed);
+}
+
 void TranslationSession::stop()
 {
     running_.exchange(false);

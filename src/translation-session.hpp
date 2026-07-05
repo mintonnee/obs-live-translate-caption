@@ -34,6 +34,9 @@ public:
     void release_output(const void *token);
     bool output_owned_by_other(const void *token);
 
+    void set_output_delay_ms(uint32_t delay_ms);
+    uint32_t output_delay_ms() const;
+
     ConnStatus status();
     std::string status_text();
     bool is_running();
@@ -57,6 +60,7 @@ private:
     bool echo_target_ = true;
 
     OwnerGuard output_owner_;
+    std::atomic<uint32_t> output_delay_ms_{0};
 
     std::atomic<bool> running_{false};
     std::atomic<bool> config_changed_{false};

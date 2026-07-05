@@ -4,11 +4,15 @@
 #include <cstring>
 #include <media-io/audio-resampler.h>
 #include <obs-module.h>
+#include <algorithm>
+#include <cmath>
 #include <string>
 
 namespace {
 
 constexpr const char *kFilterId = "gemini_live_translate_filter";
+constexpr double kMinPlaybackDelaySeconds = 0.0;
+constexpr double kMaxPlaybackDelaySeconds = 30.0;
 
 struct FilterData {
     obs_source_t *context = nullptr;
@@ -17,8 +21,16 @@ struct FilterData {
     std::string api_key;
     std::string target_lang = "en";
     bool echo_target = true;
+    uint32_t playback_delay_ms = 0;
     bool active = false; // true iff this filter is the primary one feeding the session
 };
+
+uint32_t delay_seconds_to_ms(double seconds)
+{
+    double clamped = std::clamp(seconds, kMinPlaybackDelaySeconds,
+                               kMaxPlaybackDelaySeconds);
+    return static_cast<uint32_t>(std::lround(clamped * 1000.0));
+}
 
 const char *filter_get_name(void *)
 {
@@ -76,9 +88,14 @@ void filter_update(void *data, obs_data_t *settings)
     d->api_key = obs_data_get_string(settings, "api_key");
     d->target_lang = obs_data_get_string(settings, "target_lang");
     d->echo_target = obs_data_get_bool(settings, "echo_target");
+    d->playback_delay_ms =
+        delay_seconds_to_ms(obs_data_get_double(settings, "playback_delay"));
 
     auto &session = lt::TranslationSession::instance();
-    bool run = !d->api_key.empty() && is_primary_filter(d);
+    bool primary = is_primary_filter(d);
+    if (primary)
+        session.set_output_delay_ms(d->playback_delay_ms);
+    bool run = !d->api_key.empty() && primary;
     if (run) {
         d->active = true;
         session.configure(d->api_key, d->target_lang, d->echo_target);
@@ -123,6 +140,8 @@ struct obs_audio_data *filter_audio(void *data, struct obs_audio_data *audio)
     bool became_primary = primary && !d->active;
     if (primary != d->active) {
         d->active = primary;
+        if (primary)
+            session.set_output_delay_ms(d->playback_delay_ms);
         // Primary status changed: refresh the (possibly open) properties panel
         // so a stale "disabled" warning clears. Safe from the audio thread —
         // OBS marshals the refresh to the UI thread.
@@ -173,6 +192,10 @@ obs_properties_t *filter_properties(void *data)
         props, "echo_target",
         obs_module_text("Output speech even when it is already in the target "
                         "language (otherwise stays silent)"));
+    obs_properties_add_float_slider(
+        props, "playback_delay",
+        obs_module_text("Playback Delay (seconds)"),
+        kMinPlaybackDelaySeconds, kMaxPlaybackDelaySeconds, 0.1);
 
     obs_properties_add_text(props, "api_key", obs_module_text("Gemini API Key"),
                             OBS_TEXT_PASSWORD);
@@ -195,6 +218,7 @@ void filter_defaults(obs_data_t *settings)
 {
     obs_data_set_default_string(settings, "target_lang", "en");
     obs_data_set_default_bool(settings, "echo_target", true);
+    obs_data_set_default_double(settings, "playback_delay", 0.0);
 }
 
 void filter_get_status(void *, obs_data_t *settings)
