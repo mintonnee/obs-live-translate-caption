@@ -1,17 +1,17 @@
-; Inno Setup script for OBS Live Translate.
-; Compiled in CI with:  ISCC /DMyAppVersion=<version> installer\obs-live-translate.iss
+; Inno Setup script for OBS Live Translate Caption.
+; Compiled in CI with:  ISCC /DMyAppVersion=<version> installer\obs-live-translate-caption.iss
 ; Installs the plugin DLL into the detected OBS Studio install directory.
 
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0"
 #endif
-#define MyAppName "OBS Live Translate"
-#define MyAppPublisher "weisunglee"
-#define MyAppURL "https://github.com/weisunglee/obs-live-translate"
+#define MyAppName "OBS Live Translate Caption"
+#define MyAppPublisher "plan12be"
+#define MyAppURL "https://github.com/plan12be/obs-live-translate-caption"
 
 [Setup]
 ; Keep AppId stable across versions so upgrades/uninstall work.
-AppId={{8F3A2C1E-5B6D-4A7E-9C2F-1D3E4F5A6B7C}
+AppId={{6D2B9E41-7C3A-4F58-B1E6-2A9C0D4F7E13}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
@@ -26,17 +26,23 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 UninstallDisplayName={#MyAppName}
-OutputBaseFilename=obs-live-translate-{#MyAppVersion}-windows-x64-installer
+OutputBaseFilename=obs-live-translate-caption-{#MyAppVersion}-windows-x64-installer
 ; Use Restart Manager to detect/close OBS if it has the DLL open.
 CloseApplications=yes
 RestartApplications=no
 
 [Files]
-Source: "..\build_x64\RelWithDebInfo\obs-live-translate.dll"; \
+Source: "..\build_x64\RelWithDebInfo\obs-live-translate-caption.dll"; \
   DestDir: "{app}\obs-plugins\64bit"; Flags: ignoreversion
 ; If the plugin ever ships a data/ tree (locale, etc.), add it here:
-; Source: "..\data\*"; DestDir: "{app}\data\obs-plugins\obs-live-translate"; \
+; Source: "..\data\*"; DestDir: "{app}\data\obs-plugins\obs-live-translate-caption"; \
 ;   Flags: recursesubdirs ignoreversion
+
+[InstallDelete]
+; The original speech-only plugin (obs-live-translate) registers the same OBS
+; source ids as this one; both loaded at once would collide. Remove it.
+Type: files; Name: "{app}\obs-plugins\64bit\obs-live-translate.dll"
+Type: files; Name: "{app}\obs-plugins\64bit\obs-live-translate.pdb"
 
 [Code]
 { Resolve the OBS Studio install directory from the registry written by OBS's

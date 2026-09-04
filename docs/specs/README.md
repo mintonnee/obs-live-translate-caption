@@ -1,7 +1,7 @@
 # 스펙 인덱스
 
-`docs/specs/`는 obs-live-translate의 기능 스펙을 모은다. 프로젝트 개요(제품 범위, v1
-비목표, 아키텍처)는 별도의 `000` 스펙 대신 루트 `README.md`와 `AGENTS.md`가 담당한다.
+`docs/specs/`는 obs-live-translate-caption의 기능 스펙을 모은다. 프로젝트 개요(제품 범위, v1
+비목표, 아키텍처)는 별도의 `000` 스펙 대신 루트 `README.md`가 담당한다.
 새 스펙은 그 둘에서 분리한 기능 슬라이스 하나를 대상으로 작성하고, 아래 표에 한 줄을
 추가한다.
 
@@ -12,11 +12,11 @@
 ## 템플릿
 
 ````markdown
-# obs-live-translate <기능 이름> 스펙
+# obs-live-translate-caption <기능 이름> 스펙
 
 작성일: YYYY-MM-DD
 대상: <상위 문서의 어떤 범위/성공 기준을 분리했는지>
-연관 스펙: `README.md`, `AGENTS.md`, <기타 스펙 파일명>
+연관 스펙: `README.md`, <기타 스펙 파일명>
 
 이 문서는 <상위 문서>에서 <분리한 범위>를 다룬다. <다루지 않는 것 한 문장>.
 

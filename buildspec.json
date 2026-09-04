@@ -33,13 +33,13 @@
     },
     "platformConfig": {
         "macos": {
-            "bundleId": "com.only26k.obs-live-translate"
+            "bundleId": "com.plan12be.obs-live-translate-caption"
         }
     },
-    "name": "obs-live-translate",
+    "name": "obs-live-translate-caption",
     "displayName": "Gemini Live Translate for OBS",
     "version": "0.1.6",
-    "author": "Only26k",
-    "website": "https://github.com/weisunglee/obs-live-translate",
-    "email": "https://github.com/weisunglee/obs-live-translate/issues"
+    "author": "plan12be",
+    "website": "https://github.com/plan12be/obs-live-translate-caption",
+    "email": "https://github.com/plan12be/obs-live-translate-caption/issues"
 }

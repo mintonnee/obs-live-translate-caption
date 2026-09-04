@@ -31,7 +31,8 @@ function(set_target_properties_plugin target)
       XCODE_ATTRIBUTE_GENERATE_INFOPLIST_FILE YES
       XCODE_ATTRIBUTE_INFOPLIST_FILE ""
       XCODE_ATTRIBUTE_INFOPLIST_KEY_CFBundleDisplayName ${target}
-      XCODE_ATTRIBUTE_INFOPLIST_KEY_NSHumanReadableCopyright "(c) ${CURRENT_YEAR} ${PLUGIN_AUTHOR}"
+      XCODE_ATTRIBUTE_INFOPLIST_KEY_NSHumanReadableCopyright
+        "(c) ${CURRENT_YEAR} ${PLUGIN_AUTHOR}. Based on obs-live-translate (c) 2026 Only26k (weisunglee). GPL-2.0"
       XCODE_ATTRIBUTE_INSTALL_PATH "$(USER_LIBRARY_DIR)/Application Support/obs-studio/plugins"
   )
 

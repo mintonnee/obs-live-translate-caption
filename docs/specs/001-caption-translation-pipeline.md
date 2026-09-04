@@ -1,8 +1,8 @@
-# obs-live-translate 자막 번역 파이프라인 스펙
+# obs-live-translate-caption 자막 번역 파이프라인 스펙
 
 작성일: 2026-09-04
 대상: `README.md` "Non-goals (v1)"에서 제외했던 **captions/subtitles**를 v2 기능 슬라이스로 분리
-연관 스펙: `README.md`, `AGENTS.md`, `docs/superpowers/specs/2026-06-19-single-session-guard-design.md`
+연관 스펙: `README.md`, `docs/superpowers/specs/2026-06-19-single-session-guard-design.md`
 
 이 문서는 `README.md`가 정의한 speech-to-speech 플러그인에서 **자막 번역 출력 모드**를 분리해
 다룬다. 마이크 음성을 `gemini-3.5-transcribe-live`로 전사(STT)하고, 확정된 문장 단위로
@@ -173,7 +173,7 @@ UI: `output_mode`는 콤보(`Translated speech` / `Translated captions`). 텍스
 | S3 caption-composer | 순서 정렬/창/유지 시간 로직 + 테스트 | `src/caption-composer.hpp`, `src/caption-composer.cpp`, `tests/test-caption-composer.cpp` | 그 외 전부 | S0 | 완료 |
 | S4 caption-session | WebSocket 워커, HTTP 워커, 재연결, 계측 로그 | `src/caption-session.hpp`, `src/caption-session.cpp` | `src/translation-session.*`, `src/filter.cpp` | S1, S2, S3 | 완료 |
 | S5 OBS 통합 | 설정 키/UI, 모드 전환, 텍스트 소스 출력 | `src/filter.cpp`, `src/caption-output.hpp`, `src/caption-output.cpp`, `src/plugin-main.cpp` | `src/caption-session.*`, `src/source.cpp` | S4 | 완료 |
-| S6 문서 | README/AGENTS 갱신, 이 스펙 상태 갱신 | `README.md`, `AGENTS.md`, `docs/specs/*` | `src/`, `tests/` | S5 | 완료 |
+| S6 문서 | README 갱신, 이 스펙 상태 갱신 | `README.md`, `docs/specs/*` | `src/`, `tests/` | S5 | 완료 |
 
 S1–S3은 S0 뒤에 병렬 진행 가능하다. S4 → S5 → S6은 순차다.
 

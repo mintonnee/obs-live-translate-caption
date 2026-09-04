@@ -27,16 +27,16 @@ jobs:
         run: |
           $tag = $env:GITHUB_REF_NAME
           $ver = $tag -replace '^v', ''
-          $dll = "build_x64/RelWithDebInfo/obs-live-translate.dll"
+          $dll = "build_x64/RelWithDebInfo/obs-live-translate-caption.dll"
           if (-not (Test-Path $dll)) { throw "DLL not found at $dll" }
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           # drop-in zip
           New-Item -ItemType Directory -Force -Path "stage/obs-plugins/64bit" | Out-Null
           Copy-Item $dll "stage/obs-plugins/64bit/"
           "Close OBS, then copy the obs-plugins folder into your OBS Studio install directory (e.g. C:\Program Files\obs-studio\). The build is unsigned, so SmartScreen may warn." | Set-Content "stage/INSTALL.txt"
-          Compress-Archive -Path "stage/*" -DestinationPath "dist/obs-live-translate-$tag-windows-x64.zip" -Force
+          Compress-Archive -Path "stage/*" -DestinationPath "dist/obs-live-translate-caption-$tag-windows-x64.zip" -Force
           # installer
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$ver" "installer\obs-live-translate.iss"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$ver" "installer\obs-live-translate-caption.iss"
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
           Copy-Item "installer/Output/*.exe" dist/
       - uses: actions/upload-artifact@v4
@@ -55,7 +55,7 @@ jobs:
       - name: Configure
         run: cmake --preset macos -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF
       - name: Build
-        run: cmake --build --preset macos --target obs-live-translate
+        run: cmake --build --preset macos --target obs-live-translate-caption
       - name: Package
         run: |
           set -e
@@ -65,12 +65,12 @@ jobs:
           mkdir -p dist stage
           cp -R "$plugin" stage/
           cat > stage/INSTALL.txt <<'EOF'
-          Close OBS, then copy obs-live-translate.plugin into:
+          Close OBS, then copy obs-live-translate-caption.plugin into:
             ~/Library/Application Support/obs-studio/plugins/
           The build is unsigned / not notarized. If macOS blocks it, run:
-            xattr -dr com.apple.quarantine ~/Library/Application\ Support/obs-studio/plugins/obs-live-translate.plugin
+            xattr -dr com.apple.quarantine ~/Library/Application\ Support/obs-studio/plugins/obs-live-translate-caption.plugin
           EOF
-          (cd stage && zip -qry "$GITHUB_WORKSPACE/dist/obs-live-translate-$tag-macos-universal.zip" .)
+          (cd stage && zip -qry "$GITHUB_WORKSPACE/dist/obs-live-translate-caption-$tag-macos-universal.zip" .)
       - uses: actions/upload-artifact@v4
         with:
           name: macos
@@ -89,22 +89,22 @@ jobs:
       - name: Configure
         run: cmake --preset ubuntu-x86_64 -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF
       - name: Build
-        run: cmake --build --preset ubuntu-x86_64 --target obs-live-translate
+        run: cmake --build --preset ubuntu-x86_64 --target obs-live-translate-caption
       - name: Package
         run: |
           set -e
           tag="$GITHUB_REF_NAME"
-          so=$(find build_x86_64 -maxdepth 4 -name 'obs-live-translate.so' -type f | head -1)
+          so=$(find build_x86_64 -maxdepth 4 -name 'obs-live-translate-caption.so' -type f | head -1)
           if [ -z "$so" ]; then echo "no .so found"; find build_x86_64 -name '*.so'; exit 1; fi
-          mkdir -p dist "stage/obs-live-translate/bin/64bit"
-          cp "$so" "stage/obs-live-translate/bin/64bit/"
+          mkdir -p dist "stage/obs-live-translate-caption/bin/64bit"
+          cp "$so" "stage/obs-live-translate-caption/bin/64bit/"
           cat > stage/INSTALL.txt <<'EOF'
-          Close OBS, then copy the obs-live-translate folder into:
+          Close OBS, then copy the obs-live-translate-caption folder into:
             ~/.config/obs-studio/plugins/
           (the .so should be at
-           ~/.config/obs-studio/plugins/obs-live-translate/bin/64bit/obs-live-translate.so)
+           ~/.config/obs-studio/plugins/obs-live-translate-caption/bin/64bit/obs-live-translate-caption.so)
           EOF
-          tar -C stage -czf "dist/obs-live-translate-$tag-linux-x86_64.tar.gz" obs-live-translate INSTALL.txt
+          tar -C stage -czf "dist/obs-live-translate-caption-$tag-linux-x86_64.tar.gz" obs-live-translate-caption INSTALL.txt
       - uses: actions/upload-artifact@v4
         with:
           name: linux-x86_64

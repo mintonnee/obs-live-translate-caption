@@ -1,20 +1,25 @@
-<p align="center">
-  <img src="icon.png" alt="Gemini Live Translate for OBS" width="120">
-</p>
-
 # Gemini Live Translate for OBS
 
-[![Latest release](https://img.shields.io/github/v/release/weisunglee/obs-live-translate?sort=semver)](https://github.com/weisunglee/obs-live-translate/releases)
-[![Release build](https://github.com/weisunglee/obs-live-translate/actions/workflows/release.yaml/badge.svg)](https://github.com/weisunglee/obs-live-translate/actions/workflows/release.yaml)
+[![Latest release](https://img.shields.io/github/v/release/plan12be/obs-live-translate-caption?sort=semver)](https://github.com/plan12be/obs-live-translate-caption/releases)
+[![Release build](https://github.com/plan12be/obs-live-translate-caption/actions/workflows/release.yaml/badge.svg)](https://github.com/plan12be/obs-live-translate-caption/actions/workflows/release.yaml)
 [![License: GPL v2](https://img.shields.io/badge/license-GPLv2-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
-A native OBS Studio plugin (**Windows · macOS · Linux**) that does real-time
-**speech-to-speech** translation using the Google **Gemini Live API**
-(`gemini-3.5-live-translate-preview`). It captures a microphone's audio, streams
-it to Gemini, and plays the translated speech back as a separate OBS audio
-source you can route to its own track — so a stream/recording can carry both the
-original voice and a live translation.
+A native OBS Studio plugin (**Windows · macOS · Linux**) that translates a
+microphone in real time with Google **Gemini**, in one of two output modes:
+
+- **Translated captions** — speech-to-text with `gemini-3.5-transcribe-live`,
+  per-sentence translation with `gemini-3.1-flash-lite`, written into an OBS
+  text source you style yourself (subtitle overlay). This is the mode this
+  repository was created for.
+- **Translated speech** — speech-to-speech with the Gemini Live API
+  (`gemini-3.5-live-translate-preview`), played back as a separate OBS audio
+  source you can route to its own track.
+
+This repository continues
+[weisunglee/obs-live-translate](https://github.com/weisunglee/obs-live-translate)
+(the original speech-to-speech plugin) as a standalone project and adds the
+captions pipeline; the original project's history and GPLv2 license are kept.
 
 > This plugin was built with significant assistance from AI (Claude). It is an
 > independent project and is not affiliated with or endorsed by the OBS Project
@@ -100,15 +105,20 @@ Notes:
 
 - The key is stored **in plaintext** in your scene-collection file — don't share
   that file.
-- `gemini-3.5-live-translate-preview` usage is billed per Google's pricing;
-  check current quotas and pricing in AI Studio
+- Usage is billed per Google's pricing: `gemini-3.5-live-translate-preview`
+  in speech mode, `gemini-3.5-transcribe-live` plus `gemini-3.1-flash-lite` in
+  captions mode. Check current quotas and pricing in AI Studio
   ([pricing](https://ai.google.dev/gemini-api/docs/pricing)).
 
 ## Status
 
-Released for **Windows, macOS and Linux** — grab a prebuilt package from the
-[Releases](https://github.com/weisunglee/obs-live-translate/releases) page
-(Windows is the tested platform; see the note under *Install*). Current behavior:
+Builds for **Windows, macOS and Linux**. Prebuilt packages with captions mode
+are published on this repository's
+[Releases](https://github.com/plan12be/obs-live-translate-caption/releases) page
+once a version tag is pushed; until then, build from source (see below). The
+speech-only releases of the original project remain at
+[weisunglee/obs-live-translate](https://github.com/weisunglee/obs-live-translate/releases).
+Windows is the tested platform; see the note under *Install*. Current behavior:
 
 - ✅ Mic → Gemini streaming (continuous, including pause silence), translated
   audio played back via the OBS mixer.
@@ -145,19 +155,20 @@ Released for **Windows, macOS and Linux** — grab a prebuilt package from the
 ## Install (prebuilt)
 
 Download the package for your platform from the
-[Releases](https://github.com/weisunglee/obs-live-translate/releases) page, **with
-OBS closed**:
+[Releases](https://github.com/plan12be/obs-live-translate-caption/releases) page
+(or build it yourself, see *Build from source*), then install it **with OBS
+closed**:
 
 - **Windows** — run `…-windows-x64-installer.exe` (it detects your OBS install
   automatically), or extract `…-windows-x64.zip` into your OBS Studio directory
   (e.g. `C:\Program Files\obs-studio\`). Unsigned, so SmartScreen may warn.
-- **macOS** — unzip `…-macos-universal.zip` and copy `obs-live-translate.plugin`
+- **macOS** — unzip `…-macos-universal.zip` and copy `obs-live-translate-caption.plugin`
   into `~/Library/Application Support/obs-studio/plugins/`. Unsigned / not
   notarized; if Gatekeeper blocks it, run
-  `xattr -dr com.apple.quarantine ~/Library/Application\ Support/obs-studio/plugins/obs-live-translate.plugin`.
+  `xattr -dr com.apple.quarantine ~/Library/Application\ Support/obs-studio/plugins/obs-live-translate-caption.plugin`.
 - **Linux** — extract `…-linux-x86_64.tar.gz` into `~/.config/obs-studio/plugins/`
   (the `.so` should end up at
-  `~/.config/obs-studio/plugins/obs-live-translate/bin/64bit/obs-live-translate.so`).
+  `~/.config/obs-studio/plugins/obs-live-translate-caption/bin/64bit/obs-live-translate-caption.so`).
 
 > The macOS and Linux packages are produced by CI but **not yet verified on those
 > platforms** — feedback is welcome. Windows is the tested platform.
@@ -240,7 +251,7 @@ IXWebSocket + mbedTLS) are fetched by CMake; libobs/obs-deps come from
 `-DCMAKE_COMPILE_WARNING_AS_ERROR=OFF` flag keeps third-party warnings from
 failing the build.
 
-**Windows** (Visual Studio 2022) — produces `build_x64\RelWithDebInfo\obs-live-translate.dll`:
+**Windows** (Visual Studio 2022) — produces `build_x64\RelWithDebInfo\obs-live-translate-caption.dll`:
 
 ```powershell
 cmake --preset windows-x64 -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF
@@ -254,11 +265,28 @@ Visual Studio generator is required — libobs' own CMake scripts reject Ninja
 — so in CLion enable the preset-based profile rather than the default Ninja
 "Debug" profile.
 
-**macOS** (Xcode 16+, universal) — produces `build_macos/RelWithDebInfo/obs-live-translate.plugin`:
+`cmake` is usually not on the PATH; the copy bundled with Visual Studio works
+(the first configure also downloads obs-deps and builds libobs, which takes a
+few minutes):
+
+```powershell
+$env:PATH = "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin;$env:PATH"   # VS 2026
+# VS 2022: C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin
+```
+
+To try a local build, close OBS and copy the DLL (and the `.pdb`, so crashes
+show function names in the OBS log) into the plugin directory:
+
+```powershell
+Copy-Item build_x64\RelWithDebInfo\obs-live-translate-caption.dll "C:\Program Files\obs-studio\obs-plugins\64bit\"
+Copy-Item build_x64\RelWithDebInfo\obs-live-translate-caption.pdb "C:\Program Files\obs-studio\obs-plugins\64bit\"
+```
+
+**macOS** (Xcode 16+, universal) — produces `build_macos/RelWithDebInfo/obs-live-translate-caption.plugin`:
 
 ```bash
 cmake --preset macos -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF
-cmake --build --preset macos --target obs-live-translate
+cmake --build --preset macos --target obs-live-translate-caption
 ```
 
 **Linux** — libobs comes from the obsproject PPA; install build deps first:
@@ -268,7 +296,7 @@ sudo add-apt-repository --yes ppa:obsproject/obs-studio
 sudo apt-get update
 sudo apt-get install -y obs-studio libsimde-dev libmbedtls-dev cmake ninja-build pkg-config
 cmake --preset ubuntu-x86_64 -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF
-cmake --build --preset ubuntu-x86_64 --target obs-live-translate   # build_x86_64/obs-live-translate.so
+cmake --build --preset ubuntu-x86_64 --target obs-live-translate-caption   # build_x86_64/obs-live-translate-caption.so
 ```
 
 (The exact CI steps live in [`.github/workflows/release.yaml`](.github/workflows/release.yaml).)
@@ -334,14 +362,24 @@ mbedTLS) · nlohmann/json · Catch2.
 - `translationConfig` takes `targetLanguageCode` (BCP-47) and
   `echoTargetLanguage`; there is **no source-language parameter** — the model
   auto-detects the spoken language.
+- The speech output stream is continuous (the model emits even during silence)
+  and does **not** send `turnComplete` / `generationComplete` / `interrupted`
+  in this mode. Perceived cut-offs at sentence ends are the model's own
+  phrase-boundary cadence, not a plugin bug — the plugin's delivery is gap-free.
 - Captions mode: `models/gemini-3.5-transcribe-live` over the same Live API
   endpoint (`responseModalities: ["TEXT"]`, `inputAudioTranscription.mode:
   "SMART"`, `languageCodes: []` = auto-detect); interim text arrives as
   `serverContent.interimInputTranscription`, finalized sentences as
   `serverContent.inputTranscription`. Sessions are capped at 10 minutes, so the
-  plugin reconnects proactively at 9. Translation uses
+  plugin reconnects proactively at 9. The batch model `gemini-3.5-transcribe`
+  is file/Interactions-API only and cannot be used for live captions.
+- Translation uses
   `POST …/v1beta/models/gemini-3.1-flash-lite:generateContent` with the
-  `x-goog-api-key` header; no `thinkingConfig` (Flash-Lite already defaults to minimal thinking).
+  `x-goog-api-key` header, a single `role: "user"` turn and no sampling
+  parameters. No `thinkingConfig` is sent (Flash-Lite already defaults to
+  minimal thinking); if it is ever added, the REST shape is the camelCase
+  `generationConfig.thinkingConfig.thinkingLevel` — the SDK-style flat
+  `thinking_level` is rejected with HTTP 400 "Unknown name".
 
 ## Supported languages
 
@@ -374,7 +412,30 @@ files (SRT/TXT), or embed CEA-608 captions into the stream output — see the
 non-goals table in
 [`docs/specs/001-caption-translation-pipeline.md`](docs/specs/001-caption-translation-pipeline.md).
 
+## Contributing
+
+- **Test-driven.** Write the failing Catch2 test first, then the minimal
+  implementation. Pure logic belongs behind the libobs-free `unit-tests`
+  target; changes that touch libobs (`filter.cpp`, `source.cpp`,
+  `caption-output.cpp`, the session classes) are verified by a full plugin
+  build and, for captions, by the manual checks in the spec's §5.
+- **Do not skip verification.** If a build or test cannot run because a
+  prerequisite (libobs, a Windows toolchain) is missing, say so instead of
+  claiming the change works.
+- **Branches and commits.** Work on a feature branch and keep commits scoped to
+  one change; do not add AI co-author trailers.
+- **Specs.** Larger features start as a spec under `docs/specs/` (index and
+  template in [`docs/specs/README.md`](docs/specs/README.md)); the captions
+  pipeline is `001-caption-translation-pipeline.md`. Keep the non-goals above in
+  mind when scoping a change.
+
 ## License
 
 Licensed under the GNU General Public License v2.0 — see [LICENSE](LICENSE).
 This matches OBS Studio's licensing, since the plugin links against libobs.
+
+Copyright (C) 2026 plan12be. Based on
+[obs-live-translate](https://github.com/weisunglee/obs-live-translate),
+Copyright (C) 2026 Only26k (weisunglee), also GPL-2.0. The speech-to-speech
+pipeline, build system and installer originate from that project; the captions
+pipeline was added here.
