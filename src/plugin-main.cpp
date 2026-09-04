@@ -1,3 +1,4 @@
+#include "caption-session.hpp"
 #include <obs-module.h>
 
 extern struct obs_source_info live_translate_filter_info;
@@ -22,5 +23,11 @@ bool obs_module_load(void)
 
 void obs_module_unload(void)
 {
+    // The caption session's sinks call back into libobs (text source updates).
+    // Stop it and drop the sinks now, while libobs is still alive; the
+    // singleton's destructor runs at process exit, after libobs is gone.
+    auto &captions = lt::CaptionSession::instance();
+    captions.stop();
+    captions.set_sinks({}, {});
     blog(LOG_INFO, "[live-translate] module unloaded");
 }

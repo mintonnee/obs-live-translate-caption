@@ -51,6 +51,39 @@ every received PCM chunk to OBS with contiguous, duration-spaced timestamps,
 paced so the scheduling lead stays bounded (~600 ms, enough to ride out the
 model's phrase-boundary delivery jitter) — the OBS mixer is the clock.
 
+### Captions mode
+
+The filter's **Output** setting can be switched from *Translated speech* to
+*Translated captions*. In that mode the same mic stream goes to
+`gemini-3.5-transcribe-live` (Live API speech-to-text, SMART mode) instead;
+every finalized sentence is translated with `gemini-3.1-flash-lite`
+(generateContent, the previous three sentences as
+context) and written into an OBS **text source** you pick — so the subtitles
+use whatever font, outline and position you set on that source. A second,
+optional text source can show the source-language transcript live (interim
+text while you speak, replaced by the final sentence).
+
+```
+mic ─▶ [Gemini Live Translate filter, Output = Translated captions]
+          resample 16 kHz mono → chunk → WebSocket ─▶ gemini-3.5-transcribe-live
+                                                          │ interim / final text
+                                                          ▼
+       [Source Transcript text source] ◀── (optional) ◀──┤
+                                                          │ final sentence
+                                                          ▼
+                                       generateContent ─▶ gemini-3.1-flash-lite
+                                                          │ translation
+                                                          ▼
+       [Caption text source] ◀── CaptionComposer (in-order, N lines, hold timer)
+```
+
+Translations are shown in the order the sentences were spoken even when the
+model answers out of order; a sentence whose translation fails is skipped
+(logged) without blocking the next one. The caption source keeps the last
+**Caption Lines** sentences and is cleared **Caption Hold** seconds after the
+last one. The two modes are exclusive: in captions mode the *Gemini Translated
+Audio* source stays silent.
+
 ## Getting a Gemini API key
 
 The plugin needs a Google **Gemini API key**:
@@ -79,6 +112,12 @@ Released for **Windows, macOS and Linux** — grab a prebuilt package from the
 
 - ✅ Mic → Gemini streaming (continuous, including pause silence), translated
   audio played back via the OBS mixer.
+- ✅ **Captions mode** (v2): speech-to-text with `gemini-3.5-transcribe-live`,
+  per-sentence translation with `gemini-3.1-flash-lite`, written into an OBS
+  text source (plus an optional source-transcript text source). In-order
+  display, per-sentence failure isolation, hold-to-clear, automatic reconnect
+  before the Live API's 10-minute session cap. See
+  [`docs/specs/001-caption-translation-pipeline.md`](docs/specs/001-caption-translation-pipeline.md).
 - ✅ Reconnect with exponential backoff; live API-key / target-language changes.
 - ✅ Event-driven push output with a bounded scheduling lead (~600 ms) to ride
   out the model's phrase-boundary delivery jitter.
@@ -139,6 +178,18 @@ OBS closed**:
 
    ![Gemini Translated Audio source](screenshots/audio-source.png)
 
+3. **Captions instead of speech (optional).** Add a *Text (GDI+)* source (macOS /
+   Linux: *Text (FreeType 2)*) to your scene and style it as you like. In the
+   filter set **Output** to *Translated captions*, pick that source under
+   **Caption Text Source**, and optionally a second text source under **Source
+   Transcript Text Source** to show what was recognized. **Caption Lines** (1–4)
+   and **Caption Hold (seconds)** (1–30) control how many sentences stay on
+   screen and for how long; **Custom Vocabulary** takes comma-separated names or
+   terms to bias recognition. The *Gemini Translated Audio* source is not needed
+   in this mode. Until a caption source is chosen the status reads *Set a
+   caption text source to show captions*; a misspelled name shows *Caption text
+   source "…" not found*.
+
 ## Remote control (OBS WebSocket)
 
 The filter's settings are plain OBS source settings, so you can change the
@@ -161,6 +212,12 @@ plugin support needed:
 | `echo_target` | bool | output speech even when the input is already in the target language |
 | `playback_delay` | number | seconds to delay the translated audio stream, clamped to 0-30 |
 | `api_key` | string | Gemini API key (rarely sent remotely; clearing it stops the session) |
+| `output_mode` | string | `speech` (default) or `captions`; switching stops one session and starts the other |
+| `caption_text_source` | string | name of the text source that receives translated captions (captions mode) |
+| `caption_source_text_source` | string | optional text source for the source-language transcript; empty disables it |
+| `caption_max_segments` | int | sentences kept on screen, clamped to 1-4 |
+| `caption_hold_seconds` | number | seconds after the last sentence before the caption source is cleared, clamped to 1-30 |
+| `caption_custom_vocabulary` | string | comma-separated phrases passed to the transcriber as custom vocabulary |
 
 Notes:
 
@@ -226,8 +283,12 @@ ctest --test-dir build_x64 -R "<test case name>" --output-on-failure
 ```
 
 The `unit-tests` target covers the pure logic (base64, ring buffer, backoff,
-audio conversion, audio pacing/timestamper, Gemini protocol parsing) and does
-**not** require libobs.
+audio conversion, audio pacing/timestamper, Gemini protocol parsing, caption
+protocol, translate request/response, caption composer) and does **not**
+require libobs. The caption modules also build as standalone binaries
+(`caption-protocol`, `translate-protocol`, `caption-composer`; ctest names are
+prefixed with `<module>/`) so one module can be iterated on without compiling
+the rest.
 
 ## Project layout
 
@@ -238,6 +299,11 @@ src/
   source.cpp             translated-audio source: event-driven push loop
   translation-session.*  shared WebSocket session + audio buffers + reconnect
   live-protocol.*        build/parse Gemini Live API messages
+  caption-session.*      captions mode: STT WebSocket + translate workers + sinks
+  caption-protocol.*     build/parse gemini-3.5-transcribe-live messages
+  translate-protocol.*   Flash-Lite generateContent request/response
+  caption-composer.*     in-order caption window + hold timer (pure logic)
+  caption-output.*       writes caption text into an OBS text source by name
   audio-pacing.*         OutputTimestamper (contiguous, lead-bounded timestamps)
   audio-convert.*        PCM downmix / conversion / chunking
   ring-buffer.*          bounded byte ring buffer
@@ -261,6 +327,14 @@ mbedTLS) · nlohmann/json · Catch2.
 - `translationConfig` takes `targetLanguageCode` (BCP-47) and
   `echoTargetLanguage`; there is **no source-language parameter** — the model
   auto-detects the spoken language.
+- Captions mode: `models/gemini-3.5-transcribe-live` over the same Live API
+  endpoint (`responseModalities: ["TEXT"]`, `inputAudioTranscription.mode:
+  "SMART"`, `languageCodes: []` = auto-detect); interim text arrives as
+  `serverContent.interimInputTranscription`, finalized sentences as
+  `serverContent.inputTranscription`. Sessions are capped at 10 minutes, so the
+  plugin reconnects proactively at 9. Translation uses
+  `POST …/v1beta/models/gemini-3.1-flash-lite:generateContent` with the
+  `x-goog-api-key` header; no `thinkingConfig` (Flash-Lite already defaults to minimal thinking).
 
 ## Supported languages
 
@@ -283,13 +357,14 @@ correctly.
 There is **no source-language selection** — Gemini auto-detects the spoken
 language, so you only pick what to translate *into*.
 
-## Non-goals (v1)
+## Non-goals
 
-Captions/subtitles, multiple simultaneous sessions, encrypted key storage, and
-explicit source-language selection are out of scope.
-
-Captions are planned as a v2 output mode (STT via `gemini-3.5-transcribe-live`
-+ translation via `gemini-3.5-flash-lite`, written to an OBS text source); see
+Multiple simultaneous sessions (e.g. speech **and** captions at once, or two
+target languages), encrypted key storage, and explicit source-language
+selection are out of scope. Captions mode (v2) is limited to updating an
+existing OBS text source: it does not create or style sources, write caption
+files (SRT/TXT), or embed CEA-608 captions into the stream output — see the
+non-goals table in
 [`docs/specs/001-caption-translation-pipeline.md`](docs/specs/001-caption-translation-pipeline.md).
 
 ## License

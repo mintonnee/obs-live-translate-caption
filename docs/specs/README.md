@@ -7,7 +7,7 @@
 
 | 번호 | 파일 | 대상 | 상태 |
 |---|---|---|---|
-| 001 | `001-caption-translation-pipeline.md` | STT 전사(`gemini-3.5-transcribe-live`) + LLM 번역(`gemini-3.5-flash-lite`)으로 OBS 텍스트 소스에 번역 자막 출력 | 미착수 |
+| 001 | `001-caption-translation-pipeline.md` | STT 전사(`gemini-3.5-transcribe-live`) + LLM 번역(`gemini-3.1-flash-lite`)으로 OBS 텍스트 소스에 번역 자막 출력 | 구현 완료 (2026-09-04 OBS 실사용으로 자막 출력 확인) |
 
 ## 템플릿
 

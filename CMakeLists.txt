@@ -51,6 +51,11 @@ add_library(${CMAKE_PROJECT_NAME} MODULE
   src/output-delay.cpp
   src/source.cpp
   src/translation-session.cpp
+  src/caption-protocol.cpp
+  src/translate-protocol.cpp
+  src/caption-composer.cpp
+  src/caption-session.cpp
+  src/caption-output.cpp
 )
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE
   OBS::libobs

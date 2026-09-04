@@ -39,9 +39,10 @@ Install: copy `build_x64\RelWithDebInfo\obs-live-translate.dll` to
   (e.g. libobs) is missing, stop and report what is missing — don't claim done.
 - **Commits**: author as `weisunglee`, never add Claude/AI trailers. Use a feature
   branch; do not commit directly to `main` unless explicitly told.
-- Keep changes scoped. The spec's non-goals (captions, multiple simultaneous
-  sessions, encrypted key storage, explicit source-language selection) remain out
-  of scope for v1. Captions are specified separately for v2 in
+- Keep changes scoped. Non-goals: multiple simultaneous sessions (speech and
+  captions at once, or two target languages), encrypted key storage, explicit
+  source-language selection, caption files / CEA-608 stream captions / text
+  source creation. Captions mode (v2) is specified in
   `docs/specs/001-caption-translation-pipeline.md`; feature specs live under
   `docs/specs/` (index and template in `docs/specs/README.md`).
 
@@ -56,6 +57,15 @@ Install: copy `build_x64\RelWithDebInfo\obs-live-translate.dll` to
   `OutputTimestamper` to keep a bounded (~100 ms) scheduling lead.
 - `audio-pacing.*`, `audio-convert.*`, `ring-buffer.*`, `backoff.*`,
   `live-protocol.*`, `base64.*` — pure modules, each with a Catch2 test.
+- Captions mode (`output_mode = captions`, exclusive with speech):
+  `caption-session.*` — shared singleton: WebSocket to
+  `gemini-3.5-transcribe-live` (reconnect + backoff, proactive reconnect at
+  9 min), 3 HTTP translate workers (`gemini-3.1-flash-lite`), text sinks
+  installed by the filter. `caption-protocol.*`, `translate-protocol.*`,
+  `caption-composer.*` — pure modules with Catch2 tests (also built as
+  standalone `caption-protocol` / `translate-protocol` / `caption-composer`
+  test binaries). `caption-output.*` — writes into an OBS text source by name.
+  `plugin-main.cpp` stops the caption session and drops its sinks on unload.
 
 ## Key technical facts (verified against Google's docs)
 
@@ -70,3 +80,11 @@ Install: copy `build_x64\RelWithDebInfo\obs-live-translate.dll` to
   **not** send `turnComplete`/`generationComplete`/`interrupted` in this mode.
   Perceived cut-offs at sentence ends are the model's own phrase-boundary cadence,
   not a plugin bug — the plugin's delivery is gap-free.
+- Captions: `models/gemini-3.5-transcribe-live` on the same Live API endpoint,
+  `responseModalities: ["TEXT"]`, `inputAudioTranscription.mode: "SMART"`,
+  interim = `serverContent.interimInputTranscription.text`, final =
+  `serverContent.inputTranscription.text`, 10-minute session cap. Translation:
+  `POST /v1beta/models/gemini-3.1-flash-lite:generateContent`, header
+  `x-goog-api-key`, no `thinkingConfig` (Flash-Lite defaults to minimal; if ever added use REST camelCase `generationConfig.thinkingConfig.thinkingLevel`, the SDK-style `thinking_level` is rejected with HTTP 400), no sampling
+  parameters, last `contents` entry must be `role: "user"`. The batch model
+  `gemini-3.5-transcribe` is file/Interactions-API only — do not use it here.
