@@ -41,7 +41,9 @@ Install: copy `build_x64\RelWithDebInfo\obs-live-translate.dll` to
   branch; do not commit directly to `main` unless explicitly told.
 - Keep changes scoped. The spec's non-goals (captions, multiple simultaneous
   sessions, encrypted key storage, explicit source-language selection) remain out
-  of scope for v1.
+  of scope for v1. Captions are specified separately for v2 in
+  `docs/specs/001-caption-translation-pipeline.md`; feature specs live under
+  `docs/specs/` (index and template in `docs/specs/README.md`).
 
 ## Architecture (quick map)
 

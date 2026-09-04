@@ -288,6 +288,10 @@ language, so you only pick what to translate *into*.
 Captions/subtitles, multiple simultaneous sessions, encrypted key storage, and
 explicit source-language selection are out of scope.
 
+Captions are planned as a v2 output mode (STT via `gemini-3.5-transcribe-live`
++ translation via `gemini-3.5-flash-lite`, written to an OBS text source); see
+[`docs/specs/001-caption-translation-pipeline.md`](docs/specs/001-caption-translation-pipeline.md).
+
 ## License
 
 Licensed under the GNU General Public License v2.0 — see [LICENSE](LICENSE).
