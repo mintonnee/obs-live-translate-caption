@@ -28,6 +28,11 @@ struct TranslateRequest {
     // translation within about this many characters (lines x width). 0 = no
     // length hint.
     int max_chars = 0;
+    // Proper nouns / terms the transcriber was biased toward (the filter's
+    // custom vocabulary). When non-empty, the system instruction lists them as
+    // a glossary: keep their spelling as given, never translate them into
+    // common words. Empty = no glossary sentence.
+    std::vector<std::string> glossary;
 };
 
 // Builds the JSON body:

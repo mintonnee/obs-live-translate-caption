@@ -26,6 +26,22 @@ std::string build_system_instruction(const TranslateRequest &req)
         s += std::to_string(req.max_chars);
         s += " characters when possible; prefer shorter wording over dropping meaning.";
     }
+    if (!req.glossary.empty()) {
+        // Same list the transcriber was biased toward, so STT and translation
+        // agree on how these names are written.
+        s += " Glossary of proper nouns and terms: ";
+        bool first = true;
+        for (const auto &term : req.glossary) {
+            if (term.empty()) continue;
+            if (!first) s += ", ";
+            s += "\"";
+            s += term;
+            s += "\"";
+            first = false;
+        }
+        s += ". When one of them appears in the source, keep its spelling exactly "
+             "as listed; never translate it into a common word or rephrase it.";
+    }
     return s;
 }
 

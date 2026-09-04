@@ -209,7 +209,9 @@ closed**:
    defaults fit a 1920×1080 scene at font size 48, i.e. about 30 Hangul or 60
    Latin characters per line. **Caption Hold (seconds)** (1–30) sets how long
    the last line stays; **Custom Vocabulary** takes comma-separated names or
-   terms to bias recognition. On the text source itself leave *Word wrap* and
+   terms to bias recognition and is also handed to the translator as a
+   glossary, so those names keep their spelling instead of being translated.
+   On the text source itself leave *Word wrap* and
    *Use custom text extents* **off** (the plugin already wraps, and a second
    wrap would split lines twice) and set the horizontal alignment to center.
    The *Gemini Translated Audio* source is not needed in this mode. Until a
@@ -245,7 +247,7 @@ plugin support needed:
 | `caption_max_chars_per_line` | int | line width in display units (CJK = 2), clamped to 10-120 |
 | `caption_max_segments` | int | legacy (pre-002): read as the line count only when `caption_max_lines` has never been set |
 | `caption_hold_seconds` | number | seconds after the last sentence before the caption source is cleared, clamped to 1-30 |
-| `caption_custom_vocabulary` | string | comma-separated phrases passed to the transcriber as custom vocabulary |
+| `caption_custom_vocabulary` | string | comma-separated phrases passed to the transcriber as custom vocabulary and to the translator as a keep-as-is glossary |
 
 Notes:
 

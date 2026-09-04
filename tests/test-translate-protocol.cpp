@@ -317,3 +317,44 @@ TEST_CASE("parse treats a top-level non-object JSON as a parse error")
     REQUIRE_FALSE(r.ok);
     REQUIRE(r.error == "parse error");
 }
+
+TEST_CASE("glossary terms are listed in the system instruction")
+{
+    TranslateRequest req;
+    req.target_code = "ko";
+    req.target_name = "Korean";
+    req.text = "hello";
+    req.glossary = {"Gemini", "OBS Studio", "곽민규"};
+
+    std::string body = build_translate_request(req);
+    json j = json::parse(body);
+    std::string instr = j["system_instruction"]["parts"][0]["text"].get<std::string>();
+
+    REQUIRE(instr.find("Glossary") != std::string::npos);
+    REQUIRE(instr.find("\"Gemini\"") != std::string::npos);
+    REQUIRE(instr.find("\"OBS Studio\"") != std::string::npos);
+    REQUIRE(instr.find("\"곽민규\"") != std::string::npos);
+    REQUIRE(instr.find("keep its spelling exactly as listed") != std::string::npos);
+    // The glossary belongs to the instruction, not to the text being translated.
+    std::string user = j["contents"][0]["parts"][0]["text"].get<std::string>();
+    REQUIRE(user.find("Gemini") == std::string::npos);
+}
+
+TEST_CASE("no glossary sentence without terms")
+{
+    TranslateRequest req;
+    req.target_code = "ko";
+    req.target_name = "Korean";
+    req.text = "hello";
+
+    std::string body = build_translate_request(req);
+    json j = json::parse(body);
+    std::string instr = j["system_instruction"]["parts"][0]["text"].get<std::string>();
+    REQUIRE(instr.find("Glossary") == std::string::npos);
+
+    req.glossary = {""};
+    body = build_translate_request(req);
+    j = json::parse(body);
+    instr = j["system_instruction"]["parts"][0]["text"].get<std::string>();
+    REQUIRE(instr.find("\"\"") == std::string::npos);
+}

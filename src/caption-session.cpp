@@ -532,12 +532,14 @@ void CaptionSession::translate_worker()
     TranslateJob job;
     while (pop_job(job)) {
         std::string key, lang, name;
+        std::vector<std::string> glossary;
         int max_lines = 2, max_width = 60;
         {
             std::lock_guard<std::mutex> lk(cfg_mtx_);
             key = cfg_.api_key;
             lang = cfg_.target_lang;
             name = cfg_.target_name;
+            glossary = cfg_.custom_vocabulary;
             max_lines = cfg_.max_lines;
             max_width = cfg_.max_width;
         }
@@ -549,6 +551,8 @@ void CaptionSession::translate_worker()
         req.text = job.text;
         // Length hint so truncation stays rare (spec 002 §4.5).
         req.max_chars = max_lines * max_width;
+        // Same terms the transcriber is biased toward, so names survive translation.
+        req.glossary = std::move(glossary);
         std::string body = build_translate_request(req);
 
         auto args = client.createRequest(url, ix::HttpClient::kPost);
