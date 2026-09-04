@@ -92,11 +92,14 @@ private:
     // §4.4, criterion 9). The coalescing buffer keeps the raw text.
     void publish_source_text(const std::string &text, bool force);
     void flush_pending_source(); // sends a coalesced interim once its window elapsed
+    // Blanks the source-transcript source once nothing was published to it for
+    // hold_ms, mirroring the composer's hold timeout for the caption source.
+    void clear_source_if_idle();
     void reset_source_state();   // drops interim bookkeeping (reconnect / stop)
 
     // Current text-box limits. Takes cfg_mtx_ only: the lock order is cfg_mtx_
     // first, then out_mtx_, and the two are never held at the same time.
-    void box_config(int &max_lines, int &max_width);
+    void box_config(int &max_lines, int &max_width, uint64_t *hold_ms = nullptr);
 
     // Proactive reconnect before the Live API's 10-minute session cap.
     static constexpr uint64_t kSessionMaxMs = 9 * 60 * 1000;
@@ -123,6 +126,7 @@ private:
     TextSink source_sink_;
     std::string pending_interim_;
     bool has_pending_interim_ = false;
+    bool source_shown_ = false; // the source sink currently displays text
     uint64_t last_source_publish_ms_ = 0;
 
     std::mutex job_mtx_;

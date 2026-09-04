@@ -134,7 +134,9 @@ README "Usage"의 자막 단계에 권장 텍스트 소스 설정을 적는다: 
 
 `publish_source_text()`와 `flush_pending_source()`가 sink에 넘기기 직전에
 `wrap_tail(text, max_width, max_lines)`를 `\n`으로 이어 붙인 문자열로 바꾼다. interim과 final 모두
-같은 규칙이다. 폭·줄 수는 `CaptionConfig`에 추가한 `max_lines`, `max_width`를 쓴다.
+같은 규칙이다. 폭·줄 수는 `CaptionConfig`에 추가한 `max_lines`, `max_width`를 쓴다. 원문 소스도 자막 창과
+같은 `hold_seconds`를 따른다: 마지막 원문 발행 후 그 시간이 지나고 대기 중인 interim이 없으면 세션 틱에서
+빈 문자열을 내보내 비운다(2026-09-05 실사용에서 발견한 누락을 보완).
 
 세션은 `render_and_publish()`에서 잘림 통지를 읽어 성공 기준 8 형식으로 `LOG_INFO`를 남긴다.
 

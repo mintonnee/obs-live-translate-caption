@@ -191,6 +191,7 @@ void CaptionSession::stop()
         composer_.clear();
         pending_interim_.clear();
         has_pending_interim_ = false;
+        source_shown_ = false;
         last_source_publish_ms_ = 0;
         caption_sink = caption_sink_;
         source_sink = source_sink_;
@@ -226,11 +227,17 @@ bool CaptionSession::pop_job(TranslateJob &job)
     return true;
 }
 
-void CaptionSession::box_config(int &max_lines, int &max_width)
+void CaptionSession::box_config(int &max_lines, int &max_width, uint64_t *hold_ms)
 {
     std::lock_guard<std::mutex> lk(cfg_mtx_);
     max_lines = cfg_.max_lines;
     max_width = cfg_.max_width;
+    if (hold_ms) {
+        double hold = cfg_.hold_seconds * 1000.0;
+        if (hold < 1000.0) hold = 1000.0;
+        if (hold > 30000.0) hold = 30000.0;
+        *hold_ms = static_cast<uint64_t>(hold);
+    }
 }
 
 void CaptionSession::render_and_publish()
@@ -277,6 +284,7 @@ void CaptionSession::publish_source_text(const std::string &text, bool force)
         last_source_publish_ms_ = now;
         pending_interim_.clear();
         has_pending_interim_ = false;
+        source_shown_ = !text.empty();
         sink = source_sink_;
     }
     if (sink) sink(join_lines(wrap_tail(text, max_width, max_lines)));
@@ -299,9 +307,28 @@ void CaptionSession::flush_pending_source()
         pending_interim_.clear();
         has_pending_interim_ = false;
         last_source_publish_ms_ = now;
+        source_shown_ = !text.empty();
         sink = source_sink_;
     }
     if (sink) sink(join_lines(wrap_tail(text, max_width, max_lines)));
+}
+
+void CaptionSession::clear_source_if_idle()
+{
+    int max_lines = 2, max_width = 60;
+    uint64_t hold_ms = 4000;
+    box_config(max_lines, max_width, &hold_ms);
+
+    std::lock_guard<std::mutex> plk(publish_mtx_);
+    TextSink sink;
+    {
+        std::lock_guard<std::mutex> lk(out_mtx_);
+        if (!source_shown_ || has_pending_interim_) return;
+        if (elapsed_ms(last_source_publish_ms_, now_ms()) < hold_ms) return;
+        source_shown_ = false;
+        sink = source_sink_;
+    }
+    if (sink) sink("");
 }
 
 void CaptionSession::reset_source_state()
@@ -440,7 +467,10 @@ void CaptionSession::run()
             if (elapsed_ms(last_tick, now) >= kTickMs) {
                 last_tick = now;
                 flush_pending_source();
-                // Drives the composer's hold timeout even while nothing arrives.
+                // Both hold timeouts are driven from here even while nothing
+                // arrives: the caption window via the composer, the source
+                // transcript via clear_source_if_idle().
+                clear_source_if_idle();
                 render_and_publish();
             }
 
