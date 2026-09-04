@@ -247,6 +247,13 @@ cmake --preset windows-x64 -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF
 cmake --build --preset windows-x64
 ```
 
+With Visual Studio 2026 (CMake ≥ 4.1, e.g. the copy bundled with VS) use the
+`windows-x64-vs2026` preset instead; it targets the newest installed Windows
+SDK and shares the same `build_x64` output directory. On Windows the
+Visual Studio generator is required — libobs' own CMake scripts reject Ninja
+— so in CLion enable the preset-based profile rather than the default Ninja
+"Debug" profile.
+
 **macOS** (Xcode 16+, universal) — produces `build_macos/RelWithDebInfo/obs-live-translate.plugin`:
 
 ```bash
