@@ -1,15 +1,19 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
 
 // Live API message builders/parsers for the caption (STT) session that talks to
 // models/gemini-3.5-transcribe-live. Pure functions, no libobs dependency.
-// Audio input frames reuse build_realtime_input_message() from live-protocol.hpp.
 // Spec: docs/specs/001-caption-translation-pipeline.md §3, §4.3, success criterion 5.
 namespace lt {
 
 constexpr const char *kCaptionModel = "models/gemini-3.5-transcribe-live";
+
+// Builds the {"realtimeInput": {"audio": {...}}} JSON that carries one chunk of
+// 16 kHz mono S16LE PCM, base64-encoded, to the Live API.
+std::string build_realtime_input_message(const uint8_t *pcm, size_t len);
 
 struct CaptionSetupOptions {
     // BCP-47 hints for inputAudioTranscription.languageCodes. Empty = auto-detect

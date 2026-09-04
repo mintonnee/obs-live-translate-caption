@@ -9,25 +9,17 @@ include(Catch)
 add_executable(unit-tests
   test-main.cpp
   test-audio-convert.cpp
-  test-audio-pacing.cpp
   test-base64.cpp
   test-backoff.cpp
-  test-live-protocol.cpp
-  test-output-delay.cpp
   test-ring-buffer.cpp
-  test-owner-guard.cpp
   test-smoke.cpp
   test-caption-protocol.cpp
   test-translate-protocol.cpp
   test-caption-composer.cpp
   test-caption-wrap.cpp
   ${CMAKE_SOURCE_DIR}/src/audio-convert.cpp
-  ${CMAKE_SOURCE_DIR}/src/audio-pacing.cpp
   ${CMAKE_SOURCE_DIR}/src/backoff.cpp
   ${CMAKE_SOURCE_DIR}/src/base64.cpp
-  ${CMAKE_SOURCE_DIR}/src/live-protocol.cpp
-  ${CMAKE_SOURCE_DIR}/src/output-delay.cpp
-  ${CMAKE_SOURCE_DIR}/src/owner-guard.cpp
   ${CMAKE_SOURCE_DIR}/src/ring-buffer.cpp
   ${CMAKE_SOURCE_DIR}/src/caption-protocol.cpp
   ${CMAKE_SOURCE_DIR}/src/translate-protocol.cpp
@@ -54,6 +46,7 @@ function(add_module_test name)
 endfunction()
 
 add_module_test(caption-protocol
+  ${CMAKE_SOURCE_DIR}/src/base64.cpp
   ${CMAKE_SOURCE_DIR}/src/caption-protocol.cpp
 )
 add_module_test(translate-protocol

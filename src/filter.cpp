@@ -3,12 +3,10 @@
 #include "caption-session.hpp"
 #include "translate-protocol.hpp"
 #include "languages.hpp"
-#include "translation-session.hpp"
 #include <cstring>
 #include <media-io/audio-resampler.h>
 #include <obs-module.h>
 #include <algorithm>
-#include <cmath>
 #include <string>
 #include <utility>
 #include <vector>
@@ -16,8 +14,6 @@
 namespace {
 
 constexpr const char *kFilterId = "gemini_live_translate_filter";
-constexpr double kMinPlaybackDelaySeconds = 0.0;
-constexpr double kMaxPlaybackDelaySeconds = 30.0;
 // Caption text box (spec 002 §4.1). `caption_max_lines` supersedes the legacy
 // `caption_max_segments` key, which is still read for old scene collections.
 constexpr int kMinCaptionLines = 1;
@@ -28,8 +24,6 @@ constexpr int kMaxCaptionWidth = 120;
 constexpr int kDefaultCaptionWidth = 60;
 constexpr double kMinCaptionHoldSeconds = 1.0;
 constexpr double kMaxCaptionHoldSeconds = 30.0;
-constexpr const char *kModeSpeech = "speech";
-constexpr const char *kModeCaptions = "captions";
 // Translation models offered in the properties combo (the field stays editable).
 constexpr const char *kTranslateModelChoices[] = {
     "gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.5-flash",
@@ -42,13 +36,6 @@ struct FilterData {
     lt::Chunker chunker{3200};
     std::string api_key;
     std::string target_lang = "en";
-    bool echo_target = true;
-    uint32_t playback_delay_ms = 0;
-    bool active = false; // true iff this filter is the primary one feeding the
-                         // speech session
-    // Captions mode (spec §4.1, §4.2). The two modes are exclusive, so at most
-    // one of `active` / `caption_active` is ever true for a given filter.
-    bool captions_mode = false;
     std::string caption_text_source;
     std::string caption_source_text_source;
     int caption_max_lines = kDefaultCaptionLines;
@@ -58,13 +45,6 @@ struct FilterData {
     std::string translate_model; // generateContent model id, "" = kTranslateModel
     bool caption_active = false; // true iff this filter drives the caption session
 };
-
-uint32_t delay_seconds_to_ms(double seconds)
-{
-    double clamped = std::clamp(seconds, kMinPlaybackDelaySeconds,
-                               kMaxPlaybackDelaySeconds);
-    return static_cast<uint32_t>(std::lround(clamped * 1000.0));
-}
 
 const char *filter_get_name(void *)
 {
@@ -172,7 +152,6 @@ void primary_scan_cb(obs_source_t * /*parent*/, obs_source_t *child, void *param
 // call, so there is no persistent owner that can go stale. Note: this does NOT
 // coordinate across different sources — the shared session has a single stream,
 // so putting the filter on two different sources is unsupported (see README).
-// The rule is common to both output modes.
 bool is_primary_filter(FilterData *d)
 {
     obs_source_t *parent = obs_filter_get_parent(d->context);
@@ -206,12 +185,6 @@ void filter_update(void *data, obs_data_t *settings)
     auto *d = static_cast<FilterData *>(data);
     d->api_key = obs_data_get_string(settings, "api_key");
     d->target_lang = obs_data_get_string(settings, "target_lang");
-    d->echo_target = obs_data_get_bool(settings, "echo_target");
-    d->playback_delay_ms =
-        delay_seconds_to_ms(obs_data_get_double(settings, "playback_delay"));
-
-    const char *mode = obs_data_get_string(settings, "output_mode");
-    bool captions = mode && std::strcmp(mode, kModeCaptions) == 0;
     std::string caption_text_source =
         obs_data_get_string(settings, "caption_text_source");
     std::string caption_source_text_source =
@@ -226,7 +199,6 @@ void filter_update(void *data, obs_data_t *settings)
         d->caption_source_text_source != caption_source_text_source)
         lt::caption_output_write(d->caption_source_text_source, "");
 
-    d->captions_mode = captions;
     d->caption_text_source = caption_text_source;
     d->caption_source_text_source = caption_source_text_source;
     // Scene collections written before spec 002 only carry the legacy segment
@@ -251,45 +223,17 @@ void filter_update(void *data, obs_data_t *settings)
     d->caption_custom_vocabulary =
         obs_data_get_string(settings, "caption_custom_vocabulary");
 
-    auto &speech = lt::TranslationSession::instance();
-    bool primary = is_primary_filter(d);
-    bool run = !d->api_key.empty() && primary;
-
-    if (captions) {
-        // The two modes are exclusive (spec §1): the speech session goes down
-        // before the caption session comes up.
-        if (d->active) {
-            d->active = false;
-            speech.stop();
-        }
-        if (run) {
-            d->caption_active = true;
-            // Re-install every update: the target names may have changed.
-            install_caption_sinks(d);
-            lt::CaptionSession::instance().configure(make_caption_config(d));
-        } else if (d->caption_active) {
-            // Key cleared, or another filter is now first. A remaining primary
-            // filter restarts the session from its own audio callback.
-            d->caption_active = false;
-            stop_caption_session_for_settings();
-        }
-        return;
-    }
-
-    if (d->caption_active) {
+    bool run = !d->api_key.empty() && is_primary_filter(d);
+    if (run) {
+        d->caption_active = true;
+        // Re-install every update: the target names may have changed.
+        install_caption_sinks(d);
+        lt::CaptionSession::instance().configure(make_caption_config(d));
+    } else if (d->caption_active) {
+        // Key cleared, or another filter is now first. A remaining primary
+        // filter restarts the session from its own audio callback.
         d->caption_active = false;
         stop_caption_session_for_settings();
-    }
-    if (primary) speech.set_output_delay_ms(d->playback_delay_ms);
-    if (run) {
-        d->active = true;
-        speech.configure(d->api_key, d->target_lang, d->echo_target);
-    } else if (d->active) {
-        // We were the primary feeding the session but no longer should be
-        // (key cleared, or another filter is now first). Stop it; a remaining
-        // primary filter restarts it from its own audio callback.
-        d->active = false;
-        speech.stop();
     }
 }
 
@@ -305,9 +249,8 @@ void *filter_create(obs_data_t *settings, obs_source_t *source)
 void filter_destroy(void *data)
 {
     auto *d = static_cast<FilterData *>(data);
-    // If we were feeding a session, stop it. A remaining same-source filter
+    // If we were feeding the session, stop it. A remaining same-source filter
     // (if any) becomes primary and restarts it from its next audio callback.
-    if (d->active) lt::TranslationSession::instance().stop();
     if (d->caption_active) {
         lt::CaptionSession::instance().stop();
         // stop() already blanks the sources through our sinks; clear the names
@@ -328,19 +271,14 @@ struct obs_audio_data *filter_audio(void *data, struct obs_audio_data *audio)
     auto *d = static_cast<FilterData *>(data);
     if (!d->resampler || d->api_key.empty()) return audio;
 
-    auto &speech = lt::TranslationSession::instance();
     auto &captions = lt::CaptionSession::instance();
-    bool captions_mode = d->captions_mode;
     // Only the primary (first) Gemini filter on this source feeds the session;
     // a duplicate on the same source stays a passive pass-through. Recomputed
     // live each callback, so when the primary is removed this one takes over.
     bool primary = is_primary_filter(d);
-    bool &active = captions_mode ? d->caption_active : d->active;
-    bool became_primary = primary && !active;
-    if (primary != active) {
-        active = primary;
-        if (primary && !captions_mode)
-            speech.set_output_delay_ms(d->playback_delay_ms);
+    bool became_primary = primary && !d->caption_active;
+    if (primary != d->caption_active) {
+        d->caption_active = primary;
         // Primary status changed: refresh the (possibly open) properties panel
         // so a stale "disabled" warning clears. Safe from the audio thread —
         // OBS marshals the refresh to the UI thread.
@@ -354,19 +292,12 @@ struct obs_audio_data *filter_audio(void *data, struct obs_audio_data *audio)
     // Skip when it stopped on an auth error, so a bad key doesn't spin-restart.
     // configure() only spawns the worker (or reaps an already-exited one); it
     // never joins a live connection, so it won't stall the audio callback.
-    if (captions_mode) {
-        bool needs_start = !captions.is_running() &&
-                           captions.status() != lt::ConnStatus::AuthError;
-        if (became_primary || needs_start) {
-            // The sinks may still be the previous primary's; claim them.
-            install_caption_sinks(d);
-            captions.configure(make_caption_config(d));
-        }
-    } else {
-        bool needs_start =
-            !speech.is_running() && speech.status() != lt::ConnStatus::AuthError;
-        if (became_primary || needs_start)
-            speech.configure(d->api_key, d->target_lang, d->echo_target);
+    bool needs_start = !captions.is_running() &&
+                       captions.status() != lt::ConnStatus::AuthError;
+    if (became_primary || needs_start) {
+        // The sinks may still be the previous primary's; claim them.
+        install_caption_sinks(d);
+        captions.configure(make_caption_config(d));
     }
 
     uint8_t *out[MAX_AV_PLANES] = {};
@@ -381,44 +312,10 @@ struct obs_audio_data *filter_audio(void *data, struct obs_audio_data *audio)
         // stream discontinuous, which disrupts the model's real-time VAD/turn
         // handling and delays translation output until the next speech resumes.
         auto chunks = d->chunker.push(out[0], out_frames * 2);
-        for (auto &c : chunks) {
-            if (captions_mode)
-                captions.push_input_pcm(c.data(), c.size());
-            else
-                speech.push_input_pcm(c.data(), c.size());
-        }
+        for (auto &c : chunks)
+            captions.push_input_pcm(c.data(), c.size());
     }
     return audio;
-}
-
-void set_property_enabled(obs_properties_t *props, const char *name, bool enabled)
-{
-    obs_property_t *p = obs_properties_get(props, name);
-    if (p) obs_property_set_enabled(p, enabled);
-}
-
-// Only the settings of the selected output mode stay editable, so it is obvious
-// which ones are in effect (spec §4.1).
-void apply_mode_enabled_state(obs_properties_t *props, bool captions)
-{
-    set_property_enabled(props, "echo_target", !captions);
-    set_property_enabled(props, "playback_delay", !captions);
-    set_property_enabled(props, "caption_text_source", captions);
-    set_property_enabled(props, "caption_source_text_source", captions);
-    set_property_enabled(props, "caption_max_lines", captions);
-    set_property_enabled(props, "caption_max_chars_per_line", captions);
-    set_property_enabled(props, "caption_hold_seconds", captions);
-    set_property_enabled(props, "caption_custom_vocabulary", captions);
-    set_property_enabled(props, "translate_model", captions);
-}
-
-bool output_mode_modified(obs_properties_t *props, obs_property_t *,
-                          obs_data_t *settings)
-{
-    const char *mode = obs_data_get_string(settings, "output_mode");
-    apply_mode_enabled_state(props,
-                             mode && std::strcmp(mode, kModeCaptions) == 0);
-    return true; // properties changed; refresh the panel
 }
 
 struct TextSourceLists {
@@ -448,29 +345,17 @@ std::string filter_status_text(FilterData *d)
     if (d && !is_primary_filter(d))
         return obs_module_text("Another Gemini Live Translate filter on this "
                                "source is already active; this one is disabled.");
-    if (d && d->captions_mode) {
-        std::string missing = lt::caption_output_missing_source();
-        if (!missing.empty())
-            return "Caption text source \"" + missing + "\" not found";
-        if (d->caption_text_source.empty())
-            return obs_module_text("Set a caption text source to show captions");
-        return lt::CaptionSession::instance().status_text();
-    }
-    return lt::TranslationSession::instance().status_text();
+    std::string missing = lt::caption_output_missing_source();
+    if (!missing.empty())
+        return "Caption text source \"" + missing + "\" not found";
+    if (d && d->caption_text_source.empty())
+        return obs_module_text("Set a caption text source to show captions");
+    return lt::CaptionSession::instance().status_text();
 }
 
 obs_properties_t *filter_properties(void *data)
 {
     obs_properties_t *props = obs_properties_create();
-
-    obs_property_t *mode = obs_properties_add_list(
-        props, "output_mode", obs_module_text("Output"), OBS_COMBO_TYPE_LIST,
-        OBS_COMBO_FORMAT_STRING);
-    obs_property_list_add_string(mode, obs_module_text("Translated speech"),
-                                 kModeSpeech);
-    obs_property_list_add_string(mode, obs_module_text("Translated captions"),
-                                 kModeCaptions);
-    obs_property_set_modified_callback(mode, output_mode_modified);
 
     obs_property_t *list = obs_properties_add_list(
         props, "target_lang", obs_module_text("Target Language"),
@@ -478,15 +363,6 @@ obs_properties_t *filter_properties(void *data)
     for (int i = 0; i < lt::kLanguagesCount; ++i)
         obs_property_list_add_string(list, lt::kLanguages[i].name,
                                      lt::kLanguages[i].code);
-
-    obs_properties_add_bool(
-        props, "echo_target",
-        obs_module_text("Output speech even when it is already in the target "
-                        "language (otherwise stays silent)"));
-    obs_properties_add_float_slider(
-        props, "playback_delay",
-        obs_module_text("Playback Delay (seconds)"),
-        kMinPlaybackDelaySeconds, kMaxPlaybackDelaySeconds, 0.1);
 
     // Editable combos: the text source may not exist yet, so its name can be
     // typed in before the source is created (spec §4.1).
@@ -533,9 +409,6 @@ obs_properties_t *filter_properties(void *data)
                         "scene collection file. Do not share that file."),
         OBS_TEXT_INFO);
     auto *d = static_cast<FilterData *>(data);
-    // OBS runs the modified callback when the panel opens, but seed the state
-    // here as well so the panel is correct even before that happens.
-    apply_mode_enabled_state(props, d && d->captions_mode);
     std::string status = filter_status_text(d);
     obs_properties_add_text(props, "status", status.c_str(), OBS_TEXT_INFO);
     return props;
@@ -544,9 +417,6 @@ obs_properties_t *filter_properties(void *data)
 void filter_defaults(obs_data_t *settings)
 {
     obs_data_set_default_string(settings, "target_lang", "en");
-    obs_data_set_default_bool(settings, "echo_target", true);
-    obs_data_set_default_double(settings, "playback_delay", 0.0);
-    obs_data_set_default_string(settings, "output_mode", kModeSpeech);
     obs_data_set_default_string(settings, "caption_text_source", "");
     obs_data_set_default_string(settings, "caption_source_text_source", "");
     obs_data_set_default_int(settings, "caption_max_lines", kDefaultCaptionLines);

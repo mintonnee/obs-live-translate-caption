@@ -1,9 +1,20 @@
 #include "caption-protocol.hpp"
+#include "base64.hpp"
 #include <nlohmann/json.hpp>
 
 using nlohmann::json;
 
 namespace lt {
+
+std::string build_realtime_input_message(const uint8_t *pcm, size_t len)
+{
+    json chunk;
+    chunk["mimeType"] = "audio/pcm;rate=16000";
+    chunk["data"] = base64_encode(pcm, len);
+    json j;
+    j["realtimeInput"]["audio"] = chunk;
+    return j.dump();
+}
 
 std::string build_caption_setup_message(const CaptionSetupOptions &opts)
 {

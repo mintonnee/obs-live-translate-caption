@@ -142,3 +142,19 @@ TEST_CASE("parse caption message returns Other for unrelated serverContent field
     CaptionServerMessage m = parse_caption_server_message(s);
     REQUIRE(m.kind == CaptionServerMessage::Kind::Other);
 }
+
+TEST_CASE("realtime input message carries the 16 kHz pcm mime type")
+{
+    std::vector<uint8_t> pcm{0x01, 0x02, 0x03, 0x04};
+    std::string msg = build_realtime_input_message(pcm.data(), pcm.size());
+    json j = json::parse(msg);
+    REQUIRE(j["realtimeInput"]["audio"]["mimeType"] == "audio/pcm;rate=16000");
+}
+
+TEST_CASE("realtime input message carries base64 pcm")
+{
+    std::vector<uint8_t> pcm{0x01, 0x02, 0x03, 0x04};
+    std::string msg = build_realtime_input_message(pcm.data(), pcm.size());
+    json j = json::parse(msg);
+    REQUIRE(j["realtimeInput"]["audio"]["data"].get<std::string>() == "AQIDBA==");
+}

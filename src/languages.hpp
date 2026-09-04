@@ -6,10 +6,9 @@ struct LangEntry {
     const char *name;
 };
 
-// Target languages supported by gemini-3.5-live-translate-preview, per the
-// official Gemini Live Translate docs:
-//   https://ai.google.dev/gemini-api/docs/live-api/live-translate
-// `code` is the BCP-47 value sent as translationConfig.targetLanguageCode.
+// Translation target languages offered in the filter's Target Language combo.
+// `code` is the BCP-47 value that identifies the language to the translation
+// prompt; `name` is what the combo shows.
 // Each name is the language's own endonym plus the English name in parentheses,
 // so both native speakers and non-speakers can recognize it. Common languages
 // are listed first; the rest follow in English-name alphabetical order.

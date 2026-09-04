@@ -9,6 +9,7 @@
 |---|---|---|---|
 | 001 | `001-caption-translation-pipeline.md` | STT 전사(`gemini-3.5-transcribe-live`) + LLM 번역(`gemini-3.1-flash-lite`)으로 OBS 텍스트 소스에 번역 자막 출력 | 구현 완료 (2026-09-04 OBS 실사용으로 자막 출력 확인) |
 | 002 | `002-caption-text-box-limits.md` | 자막·원문 텍스트를 줄 폭(표시 단위)과 줄 수로 제한해 텍스트 소스 넘침 방지, 잘라내기, 프롬프트 길이 힌트 | 구현 완료 (2026-09-05 OBS 실사용 확인) |
+| 003 | `003-remove-speech-mode.md` | speech-to-speech 경로(`TranslationSession`, 오디오 소스, 페이싱)와 `output_mode` 분기를 제거해 자막 전용으로 축소 | 구현 완료 (2026-09-05 OBS 실사용 확인) |
 
 ## 템플릿
 

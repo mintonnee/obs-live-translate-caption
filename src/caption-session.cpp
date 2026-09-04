@@ -2,7 +2,6 @@
 #include "backoff.hpp"
 #include "caption-protocol.hpp"
 #include "caption-wrap.hpp"
-#include "live-protocol.hpp"
 #include "translate-protocol.hpp"
 #include <ixwebsocket/IXHttpClient.h>
 #include <ixwebsocket/IXWebSocket.h>
@@ -11,8 +10,8 @@
 #include <optional>
 #include <utility>
 
-// Caption (STT + translate) session. Mirrors TranslationSession's singleton /
-// worker / backoff structure, but drives a text pipeline instead of audio:
+// Caption (STT + translate) session. A singleton with its own worker threads and
+// reconnect backoff, driving a text pipeline:
 // WebSocket -> transcripts -> translate job queue -> CaptionComposer -> sinks.
 // Spec: docs/specs/001-caption-translation-pipeline.md §4.3, §4.4, §4.7;
 // docs/specs/002-caption-text-box-limits.md §4.4, §4.5, criteria 8, 9.

@@ -24,7 +24,7 @@
 
 | 영역 | 목표 |
 |---|---|
-| 모드 | 기존 필터에 출력 모드(`speech` / `captions`)를 추가한다. 기본값은 `speech`라서 기존 씬 컬렉션은 동작이 바뀌지 않는다. |
+| 모드 | 기존 필터에 출력 모드(`speech` / `captions`)를 추가한다. 기본값은 `speech`라서 기존 씬 컬렉션은 동작이 바뀌지 않는다. `003-remove-speech-mode`에서 폐지: 음성 경로가 삭제되고 필터는 항상 자막 모드다. |
 | STT | `captions` 모드에서 마이크 PCM을 Live API `gemini-3.5-transcribe-live`로 스트리밍하고 interim/final 전사를 받는다. |
 | 번역 | final 전사 세그먼트마다 `gemini-3.1-flash-lite` generateContent를 호출해 대상 언어 텍스트를 얻는다. 직전 세그먼트를 문맥으로 함께 보낸다. |
 | 표시 | 번역 결과를 사용자가 지정한 OBS 텍스트 소스(`text_gdiplus` / `text_ft2_source`)에 쓴다. 최근 N개 세그먼트를 유지하고, 침묵이 이어지면 유지 시간 후 비운다. |
@@ -100,6 +100,8 @@ UI: `output_mode`는 콤보(`Translated speech` / `Translated captions`). 텍스
 `README.md` "Remote control" 표에 새 키를 추가한다.
 
 ### 4.2 모드 전환과 세션 소유
+
+`003-remove-speech-mode`에서 모드 전환이 폐지된다. 아래는 003 이전의 설계 기록이다.
 
 `filter_update`는 `output_mode`에 따라 `TranslationSession` 또는 새 `CaptionSession` 중 하나만
 구동한다. 전환 시 반대편 세션에 `stop()`을 호출한다. primary 판정(`is_primary_filter`)과

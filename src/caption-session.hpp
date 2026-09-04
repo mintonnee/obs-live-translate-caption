@@ -1,7 +1,6 @@
 #pragma once
 #include "caption-composer.hpp"
 #include "ring-buffer.hpp"
-#include "translation-session.hpp" // ConnStatus
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
@@ -23,6 +22,9 @@
 // criteria 7, 8, 12; docs/specs/002-caption-text-box-limits.md §4.4, §4.5,
 // criteria 8, 9.
 namespace lt {
+
+// Connection state of the caption session, surfaced in the filter's status text.
+enum class ConnStatus { Idle, Connecting, Connected, Reconnecting, AuthError };
 
 struct CaptionConfig {
     std::string api_key;
@@ -57,7 +59,7 @@ public:
     void push_input_pcm(const uint8_t *data, size_t len);
 
     ConnStatus status();
-    std::string status_text(); // same wording as TranslationSession::status_text()
+    std::string status_text(); // human-readable form of status()
     bool is_running();
 
 private:

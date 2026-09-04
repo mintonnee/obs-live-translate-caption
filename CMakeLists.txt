@@ -42,15 +42,9 @@ add_library(${CMAKE_PROJECT_NAME} MODULE
   src/plugin-main.cpp
   src/base64.cpp
   src/audio-convert.cpp
-  src/audio-pacing.cpp
   src/filter.cpp
   src/ring-buffer.cpp
-  src/live-protocol.cpp
   src/backoff.cpp
-  src/owner-guard.cpp
-  src/output-delay.cpp
-  src/source.cpp
-  src/translation-session.cpp
   src/caption-protocol.cpp
   src/translate-protocol.cpp
   src/caption-composer.cpp

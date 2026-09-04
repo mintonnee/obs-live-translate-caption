@@ -5,21 +5,18 @@
 [![License: GPL v2](https://img.shields.io/badge/license-GPLv2-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
-A native OBS Studio plugin (**Windows · macOS · Linux**) that translates a
-microphone in real time with Google **Gemini**, in one of two output modes:
+A native OBS Studio plugin (**Windows · macOS · Linux**) that turns a
+microphone into live **translated captions** with Google **Gemini**: speech-to-
+text with `gemini-3.5-transcribe-live`, per-sentence translation with a
+Flash-Lite model (default `gemini-3.1-flash-lite`), written into an OBS text
+source you style yourself — a subtitle overlay for streams and recordings.
 
-- **Translated captions** — speech-to-text with `gemini-3.5-transcribe-live`,
-  per-sentence translation with `gemini-3.1-flash-lite`, written into an OBS
-  text source you style yourself (subtitle overlay). This is the mode this
-  repository was created for.
-- **Translated speech** — speech-to-speech with the Gemini Live API
-  (`gemini-3.5-live-translate-preview`), played back as a separate OBS audio
-  source you can route to its own track.
-
-This repository continues
+This repository started as a fork of
 [weisunglee/obs-live-translate](https://github.com/weisunglee/obs-live-translate)
-(the original speech-to-speech plugin) as a standalone project and adds the
-captions pipeline; the original project's history and GPLv2 license are kept.
+(a speech-to-speech plugin) and is now a standalone, captions-only project;
+the speech-to-speech output was removed (see
+[`docs/specs/003-remove-speech-mode.md`](docs/specs/003-remove-speech-mode.md)).
+The original project's history and GPLv2 license are kept.
 
 > This plugin was built with significant assistance from AI (Claude). It is an
 > independent project and is not affiliated with or endorsed by the OBS Project
@@ -27,49 +24,20 @@ captions pipeline; the original project's history and GPLv2 license are kept.
 
 ## How it works
 
-The plugin registers two OBS sources:
-
-1. **Gemini Live Translate** *(audio filter)* — add it to your microphone source.
-   It resamples the mic to 16 kHz mono 16-bit PCM, chunks it (100 ms /
-   3200-byte chunks), and streams it **continuously** to Gemini over a TLS
-   WebSocket — including the silence during pauses, which the model relies on to
-   detect when an utterance ends and emit its translation promptly. Configure
-   your **API key**, **target language**, **echo** option, and optional
-   **playback delay** in its properties.
-
-2. **Gemini Translated Audio** *(audio source)* — add it to your scene on its own
-   audio track. It receives the 24 kHz translated PCM from Gemini and pushes it
-   into the OBS mixer as it arrives.
-
-```
-mic ─▶ [Gemini Live Translate filter]
-          resample 16 kHz mono → chunk → WebSocket ─▶ Gemini Live API
-                                                          │ 24 kHz PCM
-                                                          ▼
-       [Gemini Translated Audio source] ◀── ring buffer ◀┘
-          event-driven push loop → obs_source_output_audio → OBS mixer
-```
-
-A single shared `TranslationSession` owns the WebSocket connection (with
-reconnect/backoff) and the input/output audio buffers. The output path pushes
-every received PCM chunk to OBS with contiguous, duration-spaced timestamps,
-paced so the scheduling lead stays bounded (~600 ms, enough to ride out the
-model's phrase-boundary delivery jitter) — the OBS mixer is the clock.
-
-### Captions mode
-
-The filter's **Output** setting can be switched from *Translated speech* to
-*Translated captions*. In that mode the same mic stream goes to
-`gemini-3.5-transcribe-live` (Live API speech-to-text, SMART mode) instead;
-every finalized sentence is translated with `gemini-3.1-flash-lite`
-(generateContent, the previous three sentences as
+The plugin registers one OBS source: the **Gemini Live Translate** *audio
+filter*. Add it to your microphone source. It resamples the mic to 16 kHz mono
+16-bit PCM, chunks it (100 ms / 3200-byte chunks) and streams it
+**continuously** — silence included, which the model uses to detect the end of
+an utterance — to `gemini-3.5-transcribe-live` (Live API speech-to-text, SMART
+mode) over a TLS WebSocket. Every finalized sentence is translated with the
+selected Flash-Lite model (generateContent, the previous three sentences as
 context) and written into an OBS **text source** you pick — so the subtitles
 use whatever font, outline and position you set on that source. A second,
 optional text source can show the source-language transcript live (interim
 text while you speak, replaced by the final sentence).
 
 ```
-mic ─▶ [Gemini Live Translate filter, Output = Translated captions]
+mic ─▶ [Gemini Live Translate filter]
           resample 16 kHz mono → chunk → WebSocket ─▶ gemini-3.5-transcribe-live
                                                           │ interim / final text
                                                           ▼
@@ -91,8 +59,9 @@ only the newest **Caption Lines** lines on screen, cuts a sentence that would
 not fit with `…`, and clears the source **Caption Hold** seconds after the last
 sentence — so the text source's box never grows past what you sized it for.
 The source transcript is wrapped the same way but keeps its *last* lines, so
-the newest words stay visible while you speak. The two modes are exclusive: in
-captions mode the *Gemini Translated Audio* source stays silent.
+the newest words stay visible while you speak. A single shared `CaptionSession`
+owns the WebSocket (reconnect with backoff, proactive reconnect before the Live
+API's 10-minute cap) and three translation workers.
 
 ## Getting a Gemini API key
 
@@ -110,27 +79,24 @@ Notes:
 
 - The key is stored **in plaintext** in your scene-collection file — don't share
   that file.
-- Usage is billed per Google's pricing: `gemini-3.5-live-translate-preview`
-  in speech mode, `gemini-3.5-transcribe-live` plus the selected translation
-  model (default `gemini-3.1-flash-lite`) in
-  captions mode. Check current quotas and pricing in AI Studio
+- Usage is billed per Google's pricing for `gemini-3.5-transcribe-live` plus
+  the selected translation model (default `gemini-3.1-flash-lite`). Check
+  current quotas and pricing in AI Studio
   ([pricing](https://ai.google.dev/gemini-api/docs/pricing)).
 
 ## Status
 
-Builds for **Windows, macOS and Linux**. Prebuilt packages with captions mode
-are published on this repository's
+Builds for **Windows, macOS and Linux**. Prebuilt packages are published on
+this repository's
 [Releases](https://github.com/plan12be/obs-live-translate-caption/releases) page
 once a version tag is pushed; until then, build from source (see below). The
 speech-only releases of the original project remain at
 [weisunglee/obs-live-translate](https://github.com/weisunglee/obs-live-translate/releases).
 Windows is the tested platform; see the note under *Install*. Current behavior:
 
-- ✅ Mic → Gemini streaming (continuous, including pause silence), translated
-  audio played back via the OBS mixer.
-- ✅ **Captions mode** (v2): speech-to-text with `gemini-3.5-transcribe-live`,
-  per-sentence translation with `gemini-3.1-flash-lite`, written into an OBS
-  text source (plus an optional source-transcript text source). In-order
+- ✅ **Live captions**: speech-to-text with `gemini-3.5-transcribe-live`,
+  per-sentence translation with a selectable Flash-Lite model, written into an
+  OBS text source (plus an optional source-transcript text source). In-order
   display, per-sentence failure isolation, hold-to-clear, automatic reconnect
   before the Live API's 10-minute session cap. See
   [`docs/specs/001-caption-translation-pipeline.md`](docs/specs/001-caption-translation-pipeline.md).
@@ -139,29 +105,21 @@ Windows is the tested platform; see the note under *Install*. Current behavior:
   sentences are cut with `…` and logged; the translation prompt is asked to stay
   within the box. See
   [`docs/specs/002-caption-text-box-limits.md`](docs/specs/002-caption-text-box-limits.md).
+- ✅ **Custom vocabulary** biases recognition toward your proper nouns and is
+  handed to the translator as a glossary; **Translation Model** is selectable.
 - ✅ Reconnect with exponential backoff; live API-key / target-language changes.
-- ✅ Event-driven push output with a bounded scheduling lead (~600 ms) to ride
-  out the model's phrase-boundary delivery jitter.
-- ✅ Optional **echo** toggle (default on): output speech even when it is already
-  in the target language. With it off, input already in the target language
-  stays silent.
-- ✅ Optional **playback delay** (0-30 seconds): hold the translated audio stream
-  so every translated phrase plays later by the configured amount.
-- ✅ Sentence endings play in full — streaming the mic continuously (silence
-  included) lets the model detect when an utterance ends and emit it promptly,
-  instead of holding it until the next one starts.
 - ✅ Single-session by design. If a source has two *Gemini Live Translate*
   filters, only the first runs; the extra is disabled with a warning in its
-  properties (removing the first lets the other take over). Likewise only one
-  *Gemini Translated Audio* source plays; a second is muted with a warning.
-  Note: the plugin runs a single translation stream, so adding the **filter to
-  two different sources** is unsupported (both would feed the one session) —
-  keep it on a single source.
-- ⚠️ The translated audio lags your speech by a few seconds — the model's
-  translation latency plus a fixed ~600 ms smoothing buffer (which doesn't
-  accumulate; measured backlog stays <50 ms). Tip: when **recording**, pause a
-  beat after your last sentence before hitting stop so the trailing translation
-  is captured. **Live streams** aren't affected.
+  properties (removing the first lets the other take over). Note: the plugin
+  runs a single STT stream, so adding the **filter to two different sources**
+  is unsupported (both would feed the one session) — keep it on a single
+  source.
+- ⚠️ Captions appear a moment after you finish a sentence: the transcriber
+  finalizes on a pause, then the translation round-trip (typically under
+  1.5 s) follows.
+- ❌ The speech-to-speech output of the original project (the *Gemini
+  Translated Audio* source, echo and playback-delay options) was removed; see
+  *Upgrading from the speech-to-speech plugin* under *Install*.
 
 ## Install (prebuilt)
 
@@ -184,27 +142,33 @@ closed**:
 > The macOS and Linux packages are produced by CI but **not yet verified on those
 > platforms** — feedback is welcome. Windows is the tested platform.
 
+### Upgrading from the speech-to-speech plugin
+
+If you used the original `obs-live-translate` (or an early build of this
+plugin with the *Translated speech* output), install this plugin **after
+deleting** the old `obs-live-translate.dll` from `obs-plugins\64bit` — both
+register the same filter id, and the Windows installer does this for you. Your
+scene collection keeps working: the *Gemini Live Translate* filter now always
+produces captions (a stored `output_mode`, `echo_target` or `playback_delay`
+setting is ignored), and a leftover *Gemini Translated Audio* source shows up
+as a missing source you can simply remove.
+
 ## Usage
 
-1. Add the **Gemini Live Translate** filter to your microphone source
-   (right-click the mic → *Filters* → **+** → *Gemini Live Translate*). Paste your
-   API key, pick a target language, leave **echo** on, and optionally set
-   **Playback Delay (seconds)** from 0 to 30. Once it connects the status reads
-   *Connected*.
+1. Add a *Text (GDI+)* source (macOS / Linux: *Text (FreeType 2)*) to your
+   scene and style it as you like — this is where the captions will appear.
+   Optionally add a second one for the source-language transcript.
+
+2. Add the **Gemini Live Translate** filter to your microphone source
+   (right-click the mic → *Filters* → **+** → *Gemini Live Translate*). Paste
+   your API key and pick a target language. Once it connects the status reads
+   *Connected*. (The screenshot below predates the captions settings.)
 
    ![Gemini Live Translate filter properties](screenshots/micro-filters.png)
 
-2. Add a **Gemini Translated Audio** source to your scene (Sources → **+** →
-   *Gemini Translated Audio*). This plays the translated voice; route it to its
-   own track in *Advanced Audio Properties* to keep it separate from your mic.
-
-   ![Gemini Translated Audio source](screenshots/audio-source.png)
-
-3. **Captions instead of speech (optional).** Add a *Text (GDI+)* source (macOS /
-   Linux: *Text (FreeType 2)*) to your scene and style it as you like. In the
-   filter set **Output** to *Translated captions*, pick that source under
-   **Caption Text Source**, and optionally a second text source under **Source
-   Transcript Text Source** to show what was recognized. **Caption Lines**
+3. In the filter pick your text source under **Caption Text Source**, and
+   optionally the second one under **Source Transcript Text Source** to show
+   what was recognized. **Caption Lines**
    (1–6, default 2) and **Max Characters per Line** (10–120, default 60; CJK
    characters count as 2) define the text box the plugin wraps into — the
    defaults fit a 1920×1080 scene at font size 48, i.e. about 30 Hangul or 60
@@ -219,14 +183,14 @@ closed**:
    On the text source itself leave *Word wrap* and
    *Use custom text extents* **off** (the plugin already wraps, and a second
    wrap would split lines twice) and set the horizontal alignment to center.
-   The *Gemini Translated Audio* source is not needed in this mode. Until a
-   caption source is chosen the status reads *Set a caption text source to show
-   captions*; a misspelled name shows *Caption text source "…" not found*.
+   Until a caption source is chosen the status reads *Set a caption text source
+   to show captions*; a misspelled name shows *Caption text source "…" not
+   found*.
 
 ## Remote control (OBS WebSocket)
 
 The filter's settings are plain OBS source settings, so you can change the
-**target language**, **echo** option, and **playback delay** live from any OBS WebSocket v5 client
+**target language**, caption box, vocabulary and model live from any OBS WebSocket v5 client
 (scripts, [`obs-cli`](https://github.com/muesli/obs-cli), Advanced Scene
 Switcher, your own app) using the `SetSourceFilterSettings` request — no extra
 plugin support needed:
@@ -242,11 +206,8 @@ plugin support needed:
 | setting | type | meaning |
 |---|---|---|
 | `target_lang` | string | BCP-47 code from [`src/languages.hpp`](src/languages.hpp) (e.g. `en`, `zh`, `ja`, `pt-BR`) — the value, not the display name |
-| `echo_target` | bool | output speech even when the input is already in the target language |
-| `playback_delay` | number | seconds to delay the translated audio stream, clamped to 0-30 |
 | `api_key` | string | Gemini API key (rarely sent remotely; clearing it stops the session) |
-| `output_mode` | string | `speech` (default) or `captions`; switching stops one session and starts the other |
-| `caption_text_source` | string | name of the text source that receives translated captions (captions mode) |
+| `caption_text_source` | string | name of the text source that receives translated captions |
 | `caption_source_text_source` | string | optional text source for the source-language transcript; empty disables it |
 | `caption_max_lines` | int | lines kept on screen, clamped to 1-6 |
 | `caption_max_chars_per_line` | int | line width in display units (CJK = 2), clamped to 10-120 |
@@ -262,8 +223,10 @@ Notes:
 - Keep the request's default `overlay: true` (merge). With `overlay: false` OBS
   first resets the filter to defaults — and since `api_key` has no default, that
   **clears the key and stops translation**.
-- Changing `target_lang` reconnects the session with the new language, so expect
-  a brief gap.
+- Changing `target_lang` or the vocabulary reconnects the STT session, so
+  expect a brief gap; the caption box and model settings apply live.
+- Keys of the removed speech-to-speech mode (`output_mode`, `echo_target`,
+  `playback_delay`) are ignored if a client still sends them.
 - This is **set-only**. The runtime connection status (Connecting / Connected /
   API-key error) is not exposed over WebSocket — `GetSourceFilterSettings`
   returns the stored settings, not the live status.
@@ -354,18 +317,14 @@ the rest.
 
 ```
 src/
-  plugin-main.cpp        module entry; registers the filter + source
-  filter.cpp             mic filter: resample → chunk → stream (continuous)
-  source.cpp             translated-audio source: event-driven push loop
-  translation-session.*  shared WebSocket session + audio buffers + reconnect
-  live-protocol.*        build/parse Gemini Live API messages
-  caption-session.*      captions mode: STT WebSocket + translate workers + sinks
-  caption-protocol.*     build/parse gemini-3.5-transcribe-live messages
+  plugin-main.cpp        module entry; registers the filter
+  filter.cpp             mic filter: resample → chunk → feed the caption session
+  caption-session.*      STT WebSocket + translate workers + text sinks + reconnect
+  caption-protocol.*     build/parse gemini-3.5-transcribe-live messages + audio frames
   translate-protocol.*   Flash-Lite generateContent request/response
   caption-composer.*     in-order line window, truncation + hold timer (pure logic)
   caption-wrap.*         display-width (CJK = 2) line wrapping (pure logic)
   caption-output.*       writes caption text into an OBS text source by name
-  audio-pacing.*         OutputTimestamper (contiguous, lead-bounded timestamps)
   audio-convert.*        PCM downmix / conversion / chunking
   ring-buffer.*          bounded byte ring buffer
   backoff.*              exponential reconnect backoff
@@ -382,18 +341,11 @@ mbedTLS) · nlohmann/json · Catch2.
 
 ## Key API facts
 
-- Model: `models/gemini-3.5-live-translate-preview` over a TLS WebSocket.
-- **Input** to Gemini: 16 kHz, 16-bit PCM, mono, little-endian, 100 ms chunks.
-- **Output** from Gemini: 24 kHz, 16-bit PCM, mono.
-- `translationConfig` takes `targetLanguageCode` (BCP-47) and
-  `echoTargetLanguage`; there is **no source-language parameter** — the model
-  auto-detects the spoken language.
-- The speech output stream is continuous (the model emits even during silence)
-  and does **not** send `turnComplete` / `generationComplete` / `interrupted`
-  in this mode. Perceived cut-offs at sentence ends are the model's own
-  phrase-boundary cadence, not a plugin bug — the plugin's delivery is gap-free.
-- Captions mode: `models/gemini-3.5-transcribe-live` over the same Live API
-  endpoint (`responseModalities: ["TEXT"]`, `inputAudioTranscription.mode:
+- **Input** to Gemini: 16 kHz, 16-bit PCM, mono, little-endian, 100 ms chunks
+  (`realtimeInput.audio`, `audio/pcm;rate=16000`, base64). The mic is streamed
+  continuously, silence included, so the model can finalize on pauses.
+- Speech-to-text: `models/gemini-3.5-transcribe-live` over the Live API
+  WebSocket endpoint (`responseModalities: ["TEXT"]`, `inputAudioTranscription.mode:
   "SMART"`, `languageCodes: []` = auto-detect); interim text arrives as
   `serverContent.interimInputTranscription`, finalized sentences as
   `serverContent.inputTranscription`. Sessions are capped at 10 minutes, so the
@@ -409,42 +361,40 @@ mbedTLS) · nlohmann/json · Catch2.
 
 ## Supported languages
 
-The **target language** dropdown offers the languages
-`gemini-3.5-live-translate-preview` supports (from the
-[official Live Translate docs](https://ai.google.dev/gemini-api/docs/live-api/live-translate)),
-each labelled with its native name plus the English name (e.g. `日本語
-(Japanese)`) so both native speakers and others can recognize it. Common
-languages — English, Chinese, Japanese, Korean, Spanish, French, German,
-Portuguese (BR), Italian, Russian, Indonesian, Thai, Vietnamese — are pinned to
-the top; the rest follow in English-name alphabetical order. The exact list and
-BCP-47 codes live in [`src/languages.hpp`](src/languages.hpp).
+The **target language** dropdown lists the languages in
+[`src/languages.hpp`](src/languages.hpp), each labelled with its native name
+plus the English name (e.g. `日本語 (Japanese)`) so both native speakers and
+others can recognize it. Common languages — English, Chinese, Japanese, Korean,
+Spanish, French, German, Portuguese (BR), Italian, Russian, Indonesian, Thai,
+Vietnamese — are pinned to the top; the rest follow in English-name
+alphabetical order. The translation prompt names the language in English plus
+its BCP-47 code, so any language the translation model handles works; the list
+is inherited from the original project and can be extended in that file.
 
-Chinese uses the script-less code **`zh`**, not `zh-Hant` / `zh-Hans`. Output is
-speech, which has no script, so the script-specific codes sound identical — and
-they break same-language echo (the model doesn't treat spoken Mandarin as an
-exact match for a script-tagged target), whereas `zh` translates and echoes
-correctly.
+Chinese uses the script-less code **`zh`**; the translator writes Simplified
+Chinese by default. Ask for `zh-Hant` in the list if you need Traditional.
 
-There is **no source-language selection** — Gemini auto-detects the spoken
-language, so you only pick what to translate *into*.
+There is **no source-language selection** — the transcriber auto-detects the
+spoken language (including mid-sentence switches), so you only pick what to
+translate *into*.
 
 ## Non-goals
 
-Multiple simultaneous sessions (e.g. speech **and** captions at once, or two
-target languages), encrypted key storage, and explicit source-language
-selection are out of scope. Captions mode (v2) is limited to updating an
-existing OBS text source: it does not create or style sources, write caption
-files (SRT/TXT), or embed CEA-608 captions into the stream output — see the
-non-goals table in
-[`docs/specs/001-caption-translation-pipeline.md`](docs/specs/001-caption-translation-pipeline.md).
+Multiple simultaneous sessions (two target languages at once), speech-to-speech
+output, encrypted key storage, and explicit source-language selection are out
+of scope. The plugin only updates an existing OBS text source: it does not
+create or style sources, write caption files (SRT/TXT), or embed CEA-608
+captions into the stream output — see the non-goals tables in
+[`docs/specs/001-caption-translation-pipeline.md`](docs/specs/001-caption-translation-pipeline.md)
+and [`docs/specs/003-remove-speech-mode.md`](docs/specs/003-remove-speech-mode.md).
 
 ## Contributing
 
 - **Test-driven.** Write the failing Catch2 test first, then the minimal
   implementation. Pure logic belongs behind the libobs-free `unit-tests`
-  target; changes that touch libobs (`filter.cpp`, `source.cpp`,
-  `caption-output.cpp`, the session classes) are verified by a full plugin
-  build and, for captions, by the manual checks in the spec's §5.
+  target; changes that touch libobs (`filter.cpp`, `caption-output.cpp`,
+  `caption-session.cpp`) are verified by a full plugin build and by the manual
+  checks in the spec's §5.
 - **Do not skip verification.** If a build or test cannot run because a
   prerequisite (libobs, a Windows toolchain) is missing, say so instead of
   claiming the change works.
@@ -462,6 +412,7 @@ This matches OBS Studio's licensing, since the plugin links against libobs.
 
 Copyright (C) 2026 plan12be. Based on
 [obs-live-translate](https://github.com/weisunglee/obs-live-translate),
-Copyright (C) 2026 Only26k (weisunglee), also GPL-2.0. The speech-to-speech
-pipeline, build system and installer originate from that project; the captions
-pipeline was added here.
+Copyright (C) 2026 Only26k (weisunglee), also GPL-2.0. The build system,
+installer, audio capture/chunking and the original speech-to-speech pipeline
+originate from that project; the captions pipeline was added here and the
+speech-to-speech output was later removed.
