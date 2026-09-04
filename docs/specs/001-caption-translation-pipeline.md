@@ -81,7 +81,7 @@
 
 ### 4.1 설정 키와 UI
 
-필터(`gemini_live_translate_filter`)에 다음 키를 추가한다. 기존 키는 그대로 둔다.
+필터(`gemini_live_translate_filter`. 003 이후 `gemini_translate_caption_filter`로 변경)에 다음 키를 추가한다. 기존 키는 그대로 둔다.
 
 | 키 | 타입 | 기본값 | 의미 |
 |---|---|---|---|

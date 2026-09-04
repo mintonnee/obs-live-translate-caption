@@ -37,7 +37,7 @@
         }
     },
     "name": "obs-live-translate-caption",
-    "displayName": "Gemini Live Translate for OBS",
+    "displayName": "Gemini Translate Caption for OBS",
     "version": "0.1.6",
     "author": "plan12be",
     "website": "https://github.com/plan12be/obs-live-translate-caption",

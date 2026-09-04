@@ -39,8 +39,9 @@ Source: "..\build_x64\RelWithDebInfo\obs-live-translate-caption.dll"; \
 ;   Flags: recursesubdirs ignoreversion
 
 [InstallDelete]
-; The original speech-only plugin (obs-live-translate) registers the same OBS
-; source ids as this one; both loaded at once would collide. Remove it.
+; The original speech-only plugin (obs-live-translate) uses different source ids,
+; so it would not collide, but its filter would linger in the Filters list next
+; to ours and confuse users. Remove it on install.
 Type: files; Name: "{app}\obs-plugins\64bit\obs-live-translate.dll"
 Type: files; Name: "{app}\obs-plugins\64bit\obs-live-translate.pdb"
 

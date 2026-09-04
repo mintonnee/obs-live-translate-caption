@@ -27,14 +27,14 @@
 | 공용 타입 이관 | `ConnStatus`는 `caption-session.hpp`로, `build_realtime_input_message`는 `caption-protocol.*`로 옮긴다(테스트 포함). `base64`, `ring-buffer`, `backoff`, `audio-convert`, `languages.hpp`는 자막 경로가 쓰므로 남는다. |
 | 필터 단순화 | `output_mode`, `echo_target`, `playback_delay` 설정과 모드 전환 로직을 제거한다. 필터는 항상 자막 세션을 구동한다. first-wins 단일 필터 규칙과 AuthError 처리는 유지한다. |
 | 모듈 등록 | `plugin-main.cpp`는 필터만 등록한다. 모듈 설명 문구에서 speech-to-speech를 뺀다. |
-| 호환 | 옛 씬 컬렉션의 `output_mode=speech` 설정은 무시되고 자막 모드로 동작한다. 남아 있는 *Gemini Translated Audio* 소스는 OBS 표준 동작대로 "누락된 소스"로 표시된다. 필터 id `gemini_live_translate_filter`와 표시 이름은 바꾸지 않는다(원격 제어 `filterName` 호환). |
+| 호환 | 옛 씬 컬렉션의 `output_mode=speech` 설정은 무시되고 자막 모드로 동작한다. 남아 있는 *Gemini Translated Audio* 소스는 OBS 표준 동작대로 "누락된 소스"로 표시된다. 필터 id와 표시 이름은 이 스펙에서는 바꾸지 않는다(구현 직후 사용자 요청으로 둘 다 변경, §1 비목표 표 참조). |
 | 문서 | README에서 음성 모드 설명·설정·스크린샷을 걷어내고 출처 표기만 남긴다. `docs/superpowers/*`(음성 세션 소유권 설계 문서)를 삭제한다. |
 
 ### 비목표
 
 | 항목 | 제외 이유 |
 |---|---|
-| 필터 소스 id·표시 이름 변경(`gemini_live_translate_filter`, "Gemini Live Translate") | 씬 컬렉션과 원격 제어 요청이 이 값을 참조한다. 이름은 자막 모드에도 어색하지 않아 바꿀 이득이 작다. |
+| 필터 소스 id 변경(`gemini_live_translate_filter`) | 씬 컬렉션과 원격 제어 요청이 이 값을 참조한다. 이름은 자막 모드에도 어색하지 않아 바꿀 이득이 작다. 표시 이름은 이 스펙 구현 직후 사용자 요청으로 "Gemini Translate Caption"으로 바꿨다(2026-09-05). 저장된 필터는 기존 이름을 유지하고 새 필터부터 새 이름이 적용된다. id도 같은 날 `gemini_translate_caption_filter`로 바꿨다: 원작자 플러그인과 혼용되지 않게 하려는 요청이며, 그 대가로 원본 플러그인이 만든 필터는 이 플러그인에서 로드되지 않아 필터를 다시 추가해야 한다(README 업그레이드 안내). |
 | 옛 *Gemini Translated Audio* 소스의 자동 정리 | 플러그인이 사용자의 씬을 수정하는 것은 `001` 비목표(텍스트 소스의 `text`만 갱신)와 같은 이유로 하지 않는다. OBS가 누락 소스로 표시하고 사용자가 지운다. |
 | 로케일(`data/locale`) 추가 | 로그의 `Failed to load 'en-US' text` 경고는 무해하며 이 스펙과 무관한 별도 작업이다. |
 | 자막·음성 동시 출력 | `001` 비목표였고, 음성 경로가 사라지면서 완전히 범위 밖이 된다. |

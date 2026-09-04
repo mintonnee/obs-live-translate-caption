@@ -1,4 +1,4 @@
-# Gemini Live Translate for OBS
+# Gemini Translate Caption for OBS
 
 [![Latest release](https://img.shields.io/github/v/release/plan12be/obs-live-translate-caption?sort=semver)](https://github.com/plan12be/obs-live-translate-caption/releases)
 [![Release build](https://github.com/plan12be/obs-live-translate-caption/actions/workflows/release.yaml/badge.svg)](https://github.com/plan12be/obs-live-translate-caption/actions/workflows/release.yaml)
@@ -24,7 +24,7 @@ The original project's history and GPLv2 license are kept.
 
 ## How it works
 
-The plugin registers one OBS source: the **Gemini Live Translate** *audio
+The plugin registers one OBS source: the **Gemini Translate Caption** *audio
 filter*. Add it to your microphone source. It resamples the mic to 16 kHz mono
 16-bit PCM, chunks it (100 ms / 3200-byte chunks) and streams it
 **continuously** — silence included, which the model uses to detect the end of
@@ -37,7 +37,7 @@ optional text source can show the source-language transcript live (interim
 text while you speak, replaced by the final sentence).
 
 ```
-mic ─▶ [Gemini Live Translate filter]
+mic ─▶ [Gemini Translate Caption filter]
           resample 16 kHz mono → chunk → WebSocket ─▶ gemini-3.5-transcribe-live
                                                           │ interim / final text
                                                           ▼
@@ -73,7 +73,7 @@ The plugin needs a Google **Gemini API key**:
    automatically once you accept the Terms of Service. Otherwise click
    **Create API key**.
 3. Copy the key and paste it into the **Gemini API Key** field of the *Gemini
-   Live Translate* filter.
+   Translate Caption* filter.
 
 Notes:
 
@@ -108,7 +108,7 @@ Windows is the tested platform; see the note under *Install*. Current behavior:
 - ✅ **Custom vocabulary** biases recognition toward your proper nouns and is
   handed to the translator as a glossary; **Translation Model** is selectable.
 - ✅ Reconnect with exponential backoff; live API-key / target-language changes.
-- ✅ Single-session by design. If a source has two *Gemini Live Translate*
+- ✅ Single-session by design. If a source has two *Gemini Translate Caption*
   filters, only the first runs; the extra is disabled with a warning in its
   properties (removing the first lets the other take over). Note: the plugin
   runs a single STT stream, so adding the **filter to two different sources**
@@ -144,14 +144,20 @@ closed**:
 
 ### Upgrading from the speech-to-speech plugin
 
-If you used the original `obs-live-translate` (or an early build of this
-plugin with the *Translated speech* output), install this plugin **after
-deleting** the old `obs-live-translate.dll` from `obs-plugins\64bit` — both
-register the same filter id, and the Windows installer does this for you. Your
-scene collection keeps working: the *Gemini Live Translate* filter now always
-produces captions (a stored `output_mode`, `echo_target` or `playback_delay`
-setting is ignored), and a leftover *Gemini Translated Audio* source shows up
-as a missing source you can simply remove.
+This plugin is deliberately separate from the original `obs-live-translate`:
+its filter has a different source id (`gemini_translate_caption_filter`) and a
+different name (*Gemini Translate Caption*), so the two never get mixed up.
+Consequences when you switch:
+
+- Filters created by the original plugin (*Gemini Live Translate*) are not
+  recognized by this one. Remove them from the mic and add a **Gemini
+  Translate Caption** filter instead; the API key and other settings have to
+  be entered again.
+- A leftover *Gemini Translated Audio* source shows up as a missing source you
+  can simply remove; there is no speech output any more.
+- The Windows installer removes an installed `obs-live-translate.dll` so the
+  old filter does not linger in the *Filters* list. If you install by hand,
+  delete it yourself (with OBS closed) unless you want both plugins.
 
 ## Usage
 
@@ -159,12 +165,12 @@ as a missing source you can simply remove.
    scene and style it as you like — this is where the captions will appear.
    Optionally add a second one for the source-language transcript.
 
-2. Add the **Gemini Live Translate** filter to your microphone source
-   (right-click the mic → *Filters* → **+** → *Gemini Live Translate*). Paste
+2. Add the **Gemini Translate Caption** filter to your microphone source
+   (right-click the mic → *Filters* → **+** → *Gemini Translate Caption*). Paste
    your API key and pick a target language. Once it connects the status reads
    *Connected*. (The screenshot below predates the captions settings.)
 
-   ![Gemini Live Translate filter properties](screenshots/micro-filters.png)
+   ![Gemini Translate Caption filter properties](screenshots/micro-filters.png)
 
 3. In the filter pick your text source under **Caption Text Source**, and
    optionally the second one under **Source Transcript Text Source** to show
@@ -199,7 +205,7 @@ plugin support needed:
 { "requestType": "SetSourceFilterSettings",
   "requestData": {
     "sourceName": "Mic/Aux",
-    "filterName": "Gemini Live Translate",
+    "filterName": "Gemini Translate Caption",
     "filterSettings": { "target_lang": "ja" } } }
 ```
 
@@ -219,7 +225,7 @@ plugin support needed:
 Notes:
 
 - `sourceName` / `filterName` must match your OBS names exactly (`filterName`
-  defaults to *Gemini Live Translate*).
+  defaults to *Gemini Translate Caption*).
 - Keep the request's default `overlay: true` (merge). With `overlay: false` OBS
   first resets the filter to defaults — and since `api_key` has no default, that
   **clears the key and stops translation**.

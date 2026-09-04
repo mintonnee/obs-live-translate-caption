@@ -13,7 +13,9 @@
 
 namespace {
 
-constexpr const char *kFilterId = "gemini_live_translate_filter";
+// Distinct from the original plugin's "gemini_live_translate_filter" so the two
+// never collide or get mixed up; filters saved by the original are not ours.
+constexpr const char *kFilterId = "gemini_translate_caption_filter";
 // Caption text box (spec 002 §4.1). `caption_max_lines` supersedes the legacy
 // `caption_max_segments` key, which is still read for old scene collections.
 constexpr int kMinCaptionLines = 1;
@@ -48,7 +50,7 @@ struct FilterData {
 
 const char *filter_get_name(void *)
 {
-    return obs_module_text("Gemini Live Translate");
+    return obs_module_text("Gemini Translate Caption");
 }
 
 // English name for the translation prompt: the display names in languages.hpp
@@ -343,7 +345,7 @@ bool add_text_source_cb(void *param, obs_source_t *source)
 std::string filter_status_text(FilterData *d)
 {
     if (d && !is_primary_filter(d))
-        return obs_module_text("Another Gemini Live Translate filter on this "
+        return obs_module_text("Another Gemini Translate Caption filter on this "
                                "source is already active; this one is disabled.");
     std::string missing = lt::caption_output_missing_source();
     if (!missing.empty())
@@ -440,7 +442,7 @@ void filter_get_status(void *data, obs_data_t *settings)
 
 struct obs_source_info live_translate_filter_info = [] {
     struct obs_source_info info = {};
-    info.id = "gemini_live_translate_filter";
+    info.id = kFilterId;
     info.type = OBS_SOURCE_TYPE_FILTER;
     info.output_flags = OBS_SOURCE_AUDIO;
     info.get_name = filter_get_name;
