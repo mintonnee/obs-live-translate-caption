@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include "caption-composer.hpp"
+#include "caption-wrap.hpp"
 
 #include <string>
 #include <vector>
@@ -8,13 +9,46 @@ using namespace lt;
 
 namespace {
 
-CaptionComposerConfig make_config(int max_segments, uint64_t hold_ms)
+CaptionComposerConfig make_config(int max_lines, uint64_t hold_ms)
 {
     CaptionComposerConfig cfg;
-    cfg.max_segments = max_segments;
+    cfg.max_lines = max_lines;
     cfg.hold_ms = hold_ms;
     return cfg;
 }
+
+CaptionComposerConfig make_config(int max_lines, int max_width, uint64_t hold_ms)
+{
+    CaptionComposerConfig cfg;
+    cfg.max_lines = max_lines;
+    cfg.max_width = max_width;
+    cfg.hold_ms = hold_ms;
+    return cfg;
+}
+
+std::vector<std::string> split_lines(const std::string &text)
+{
+    std::vector<std::string> out;
+    size_t begin = 0;
+    for (;;) {
+        const size_t nl = text.find('\n', begin);
+        if (nl == std::string::npos) {
+            out.push_back(text.substr(begin));
+            return out;
+        }
+        out.push_back(text.substr(begin, nl - begin));
+        begin = nl + 1;
+    }
+}
+
+// A 102-character Latin sentence: one line at width 60 is impossible, two fit.
+const char kTwoLineText[] =
+    "the quick brown fox jumps over the lazy dog while a sleepy cat watches "
+    "the rain from a warm windowsill";
+// 67 characters: one line up to width 120, four lines at width 20.
+const char kFourLineText[] = "the quick brown fox jumps over the lazy dog and then naps in the sun";
+// 30 Hangul syllables, no spaces: display width 60.
+const char kHangul30[] = "가나다라마바사아자차가나다라마바사아자차가나다라마바사아자차";
 
 }
 
@@ -330,26 +364,32 @@ TEST_CASE("caption composer clear on an empty display reports no change")
     REQUIRE(composer.render(10) == std::nullopt);
 }
 
+// Spec 002 §4.3: max_lines 1-6, max_width 10-120, hold_ms 1000-30000.
 TEST_CASE("caption composer clamps the configuration")
 {
-    CaptionComposer low(make_config(0, 10));
-    REQUIRE(low.config().max_segments == 1);
+    CaptionComposer low(make_config(0, 4, 10));
+    REQUIRE(low.config().max_lines == 1);
+    REQUIRE(low.config().max_width == 10);
     REQUIRE(low.config().hold_ms == 1000);
 
-    CaptionComposer high(make_config(9, 600000));
-    REQUIRE(high.config().max_segments == 4);
+    CaptionComposer high(make_config(9, 500, 600000));
+    REQUIRE(high.config().max_lines == 6);
+    REQUIRE(high.config().max_width == 120);
     REQUIRE(high.config().hold_ms == 30000);
 
     CaptionComposer composer;
-    REQUIRE(composer.config().max_segments == 2);
+    REQUIRE(composer.config().max_lines == 2);
+    REQUIRE(composer.config().max_width == 60);
     REQUIRE(composer.config().hold_ms == 4000);
 
-    composer.set_config(make_config(-3, 0));
-    REQUIRE(composer.config().max_segments == 1);
+    composer.set_config(make_config(-3, -1, 0));
+    REQUIRE(composer.config().max_lines == 1);
+    REQUIRE(composer.config().max_width == 10);
     REQUIRE(composer.config().hold_ms == 1000);
 
-    composer.set_config(make_config(4, 30000));
-    REQUIRE(composer.config().max_segments == 4);
+    composer.set_config(make_config(6, 120, 30000));
+    REQUIRE(composer.config().max_lines == 6);
+    REQUIRE(composer.config().max_width == 120);
     REQUIRE(composer.config().hold_ms == 30000);
 }
 
@@ -363,4 +403,180 @@ TEST_CASE("caption composer honours a clamped hold timeout")
 
     REQUIRE(composer.render(999) == std::nullopt);
     REQUIRE(composer.render(1000) == std::optional<std::string>(""));
+}
+
+// Success criterion 7: the window holds lines, not segments. A two-line segment
+// pushes the previous one-line segment off screen.
+TEST_CASE("caption composer keeps a window of lines across segments")
+{
+    const std::vector<std::string> wrapped = wrap_text(kTwoLineText, 60);
+    REQUIRE(wrapped.size() == 2);
+
+    CaptionComposer composer(make_config(2, 60, 4000));
+
+    composer.push_final(1, "SA", 0);
+    composer.on_translated(1, "A", 0);
+    REQUIRE(composer.render(0) == std::optional<std::string>("A"));
+
+    composer.push_final(2, "SB", 10);
+    composer.on_translated(2, kTwoLineText, 10);
+    REQUIRE(composer.render(10) ==
+            std::optional<std::string>(wrapped[0] + "\n" + wrapped[1]));
+
+    composer.push_final(3, "SC", 20);
+    composer.on_translated(3, "C", 20);
+    REQUIRE(composer.render(20) == std::optional<std::string>(wrapped[1] + "\nC"));
+
+    REQUIRE(composer.take_truncations().empty());
+}
+
+// Success criterion 8: a segment longer than the window is cut with an ellipsis
+// and reported through take_truncations().
+TEST_CASE("caption composer truncates a segment that overflows the window")
+{
+    REQUIRE(wrap_text(kFourLineText, 20).size() == 4);
+
+    CaptionComposer composer(make_config(2, 20, 4000));
+
+    composer.push_final(7, "S7", 0);
+    composer.on_translated(7, kFourLineText, 0);
+
+    const auto display = composer.render(0);
+    REQUIRE(display.has_value());
+
+    const std::vector<std::string> shown = split_lines(*display);
+    REQUIRE(shown.size() == 2);
+    REQUIRE(display_width(shown[1]) <= 20);
+    REQUIRE(shown[1].size() >= 3);
+    REQUIRE(shown[1].substr(shown[1].size() - 3) == "\xE2\x80\xA6");
+
+    const std::vector<CaptionTruncation> cuts = composer.take_truncations();
+    REQUIRE(cuts.size() == 1);
+    REQUIRE(cuts[0].seq == 7);
+    REQUIRE(cuts[0].lines == 4);
+    REQUIRE(cuts[0].kept == 2);
+
+    // The list is cleared on read.
+    REQUIRE(composer.take_truncations().empty());
+}
+
+// Success criterion 8 with CJK: widths are display units, so 30 Hangul
+// syllables need two lines of width 40 and one of them is cut.
+TEST_CASE("caption composer truncates a Hangul segment on display width")
+{
+    REQUIRE(display_width(kHangul30) == 60);
+    REQUIRE(wrap_text(kHangul30, 40).size() == 2);
+
+    CaptionComposer composer(make_config(1, 40, 4000));
+
+    composer.push_final(3, "S3", 0);
+    composer.on_translated(3, kHangul30, 0);
+
+    const auto display = composer.render(0);
+    REQUIRE(display.has_value());
+    REQUIRE(split_lines(*display).size() == 1);
+    REQUIRE(display_width(*display) <= 40);
+    REQUIRE(display->substr(display->size() - 3) == "\xE2\x80\xA6");
+
+    const std::vector<CaptionTruncation> cuts = composer.take_truncations();
+    REQUIRE(cuts.size() == 1);
+    REQUIRE(cuts[0].seq == 3);
+    REQUIRE(cuts[0].lines == 2);
+    REQUIRE(cuts[0].kept == 1);
+}
+
+// Success criterion 13: max_lines 1 at width 120 is a single-line caption.
+TEST_CASE("caption composer with one line and a wide box shows only the newest line")
+{
+    CaptionComposer composer(make_config(1, 120, 4000));
+
+    composer.push_final(1, "S1", 0);
+    composer.push_final(2, "S2", 10);
+    composer.push_final(3, "S3", 20);
+
+    composer.on_translated(1, "T1", 30);
+    REQUIRE(composer.render(30) == std::optional<std::string>("T1"));
+
+    composer.on_translated(2, "T2", 40);
+    composer.on_translated(3, "T3", 40);
+    REQUIRE(composer.render(40) == std::optional<std::string>("T3"));
+    REQUIRE(composer.take_truncations().empty());
+}
+
+TEST_CASE("caption composer trims the window immediately when max_lines shrinks")
+{
+    CaptionComposer composer(make_config(3, 60, 4000));
+
+    composer.push_final(1, "S1", 0);
+    composer.push_final(2, "S2", 10);
+    composer.push_final(3, "S3", 20);
+    composer.on_translated(1, "T1", 30);
+    composer.on_translated(2, "T2", 30);
+    composer.on_translated(3, "T3", 30);
+    REQUIRE(composer.render(30) == std::optional<std::string>("T1\nT2\nT3"));
+
+    composer.set_config(make_config(1, 60, 4000));
+    REQUIRE(composer.render(40) == std::optional<std::string>("T3"));
+    REQUIRE(composer.render(50) == std::nullopt);
+}
+
+TEST_CASE("caption composer does not re-wrap lines already on screen when max_width changes")
+{
+    CaptionComposer composer(make_config(2, 120, 4000));
+
+    composer.push_final(1, "S1", 0);
+    composer.on_translated(1, kFourLineText, 0);
+    REQUIRE(composer.render(0) == std::optional<std::string>(kFourLineText));
+
+    // The narrower box applies to the next segment only.
+    composer.set_config(make_config(2, 20, 4000));
+    REQUIRE(composer.render(10) == std::nullopt);
+
+    composer.push_final(2, "S2", 20);
+    composer.on_translated(2, kFourLineText, 20);
+
+    const auto display = composer.render(20);
+    REQUIRE(display.has_value());
+    const std::vector<std::string> shown = split_lines(*display);
+    REQUIRE(shown.size() == 2);
+    REQUIRE(shown[0] == "the quick brown fox");
+    REQUIRE(display_width(shown[1]) <= 20);
+
+    const std::vector<CaptionTruncation> cuts = composer.take_truncations();
+    REQUIRE(cuts.size() == 1);
+    REQUIRE(cuts[0].seq == 2);
+    REQUIRE(cuts[0].lines == 4);
+    REQUIRE(cuts[0].kept == 2);
+}
+
+TEST_CASE("caption composer ignores a whitespace-only translation")
+{
+    CaptionComposer composer(make_config(2, 60, 4000));
+
+    composer.push_final(1, "S1", 0);
+    composer.on_translated(1, "T1", 0);
+    REQUIRE(composer.render(0) == std::optional<std::string>("T1"));
+
+    composer.push_final(2, "S2", 1000);
+    composer.on_translated(2, "   ", 1000);
+    REQUIRE(composer.render(1000) == std::nullopt);
+    REQUIRE(composer.pending_count() == 0);
+    REQUIRE(composer.take_truncations().empty());
+
+    // The hold timer still runs from the last real emission at t=0.
+    REQUIRE(composer.render(3999) == std::nullopt);
+    REQUIRE(composer.render(4000) == std::optional<std::string>(""));
+}
+
+TEST_CASE("caption composer clear drops pending truncations")
+{
+    CaptionComposer composer(make_config(1, 20, 4000));
+
+    composer.push_final(1, "S1", 0);
+    composer.on_translated(1, kFourLineText, 0);
+    REQUIRE(composer.render(0).has_value());
+
+    composer.clear();
+    REQUIRE(composer.take_truncations().empty());
+    REQUIRE(composer.render(10) == std::optional<std::string>(""));
 }

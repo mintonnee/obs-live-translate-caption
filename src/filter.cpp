@@ -17,8 +17,14 @@ namespace {
 constexpr const char *kFilterId = "gemini_live_translate_filter";
 constexpr double kMinPlaybackDelaySeconds = 0.0;
 constexpr double kMaxPlaybackDelaySeconds = 30.0;
-constexpr int kMinCaptionSegments = 1;
-constexpr int kMaxCaptionSegments = 4;
+// Caption text box (spec 002 §4.1). `caption_max_lines` supersedes the legacy
+// `caption_max_segments` key, which is still read for old scene collections.
+constexpr int kMinCaptionLines = 1;
+constexpr int kMaxCaptionLines = 6;
+constexpr int kDefaultCaptionLines = 2;
+constexpr int kMinCaptionWidth = 10;
+constexpr int kMaxCaptionWidth = 120;
+constexpr int kDefaultCaptionWidth = 60;
 constexpr double kMinCaptionHoldSeconds = 1.0;
 constexpr double kMaxCaptionHoldSeconds = 30.0;
 constexpr const char *kModeSpeech = "speech";
@@ -39,7 +45,8 @@ struct FilterData {
     bool captions_mode = false;
     std::string caption_text_source;
     std::string caption_source_text_source;
-    int caption_max_segments = 2;
+    int caption_max_lines = kDefaultCaptionLines;
+    int caption_max_width = kDefaultCaptionWidth;
     double caption_hold_seconds = 4.0;
     std::string caption_custom_vocabulary;
     bool caption_active = false; // true iff this filter drives the caption session
@@ -103,7 +110,8 @@ lt::CaptionConfig make_caption_config(const FilterData *d)
     cfg.target_lang = d->target_lang;
     cfg.target_name = target_language_name(d->target_lang);
     cfg.custom_vocabulary = split_custom_vocabulary(d->caption_custom_vocabulary);
-    cfg.max_segments = d->caption_max_segments;
+    cfg.max_lines = d->caption_max_lines;
+    cfg.max_width = d->caption_max_width;
     cfg.hold_seconds = d->caption_hold_seconds;
     return cfg;
 }
@@ -213,9 +221,21 @@ void filter_update(void *data, obs_data_t *settings)
     d->captions_mode = captions;
     d->caption_text_source = caption_text_source;
     d->caption_source_text_source = caption_source_text_source;
-    d->caption_max_segments = static_cast<int>(std::clamp<long long>(
-        obs_data_get_int(settings, "caption_max_segments"), kMinCaptionSegments,
-        kMaxCaptionSegments));
+    // Scene collections written before spec 002 only carry the legacy segment
+    // count; read it as the line count when the new key was never stored
+    // (spec 002 §4.1, criterion 12). filter_defaults deliberately registers no
+    // default for the legacy key, so obs_data_has_user_value can tell a stored
+    // value from an absent one.
+    long long lines = kDefaultCaptionLines;
+    if (obs_data_has_user_value(settings, "caption_max_lines"))
+        lines = obs_data_get_int(settings, "caption_max_lines");
+    else if (obs_data_has_user_value(settings, "caption_max_segments"))
+        lines = obs_data_get_int(settings, "caption_max_segments");
+    d->caption_max_lines = static_cast<int>(
+        std::clamp<long long>(lines, kMinCaptionLines, kMaxCaptionLines));
+    d->caption_max_width = static_cast<int>(std::clamp<long long>(
+        obs_data_get_int(settings, "caption_max_chars_per_line"),
+        kMinCaptionWidth, kMaxCaptionWidth));
     d->caption_hold_seconds =
         std::clamp(obs_data_get_double(settings, "caption_hold_seconds"),
                    kMinCaptionHoldSeconds, kMaxCaptionHoldSeconds);
@@ -376,7 +396,8 @@ void apply_mode_enabled_state(obs_properties_t *props, bool captions)
     set_property_enabled(props, "playback_delay", !captions);
     set_property_enabled(props, "caption_text_source", captions);
     set_property_enabled(props, "caption_source_text_source", captions);
-    set_property_enabled(props, "caption_max_segments", captions);
+    set_property_enabled(props, "caption_max_lines", captions);
+    set_property_enabled(props, "caption_max_chars_per_line", captions);
     set_property_enabled(props, "caption_hold_seconds", captions);
     set_property_enabled(props, "caption_custom_vocabulary", captions);
 }
@@ -472,8 +493,12 @@ obs_properties_t *filter_properties(void *data)
     obs_enum_sources(add_text_source_cb, &lists);
 
     obs_properties_add_int_slider(
-        props, "caption_max_segments", obs_module_text("Caption Lines"),
-        kMinCaptionSegments, kMaxCaptionSegments, 1);
+        props, "caption_max_lines", obs_module_text("Caption Lines"),
+        kMinCaptionLines, kMaxCaptionLines, 1);
+    obs_properties_add_int_slider(
+        props, "caption_max_chars_per_line",
+        obs_module_text("Max Characters per Line (CJK count as 2)"),
+        kMinCaptionWidth, kMaxCaptionWidth, 1);
     obs_properties_add_float_slider(
         props, "caption_hold_seconds",
         obs_module_text("Caption Hold (seconds)"), kMinCaptionHoldSeconds,
@@ -506,7 +531,11 @@ void filter_defaults(obs_data_t *settings)
     obs_data_set_default_string(settings, "output_mode", kModeSpeech);
     obs_data_set_default_string(settings, "caption_text_source", "");
     obs_data_set_default_string(settings, "caption_source_text_source", "");
-    obs_data_set_default_int(settings, "caption_max_segments", 2);
+    obs_data_set_default_int(settings, "caption_max_lines", kDefaultCaptionLines);
+    obs_data_set_default_int(settings, "caption_max_chars_per_line",
+                             kDefaultCaptionWidth);
+    // No default for the legacy "caption_max_segments": filter_update relies on
+    // obs_data_has_user_value() to detect a stored legacy value.
     obs_data_set_default_double(settings, "caption_hold_seconds", 4.0);
     obs_data_set_default_string(settings, "caption_custom_vocabulary", "");
 }

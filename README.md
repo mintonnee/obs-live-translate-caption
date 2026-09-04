@@ -84,10 +84,15 @@ mic ─▶ [Gemini Live Translate filter, Output = Translated captions]
 
 Translations are shown in the order the sentences were spoken even when the
 model answers out of order; a sentence whose translation fails is skipped
-(logged) without blocking the next one. The caption source keeps the last
-**Caption Lines** sentences and is cleared **Caption Hold** seconds after the
-last one. The two modes are exclusive: in captions mode the *Gemini Translated
-Audio* source stays silent.
+(logged) without blocking the next one. The plugin wraps every sentence itself
+to **Max Characters per Line** display units (CJK characters count as 2, so
+Korean/Japanese/Chinese lines hold half as many glyphs as Latin ones), keeps
+only the newest **Caption Lines** lines on screen, cuts a sentence that would
+not fit with `…`, and clears the source **Caption Hold** seconds after the last
+sentence — so the text source's box never grows past what you sized it for.
+The source transcript is wrapped the same way but keeps its *last* lines, so
+the newest words stay visible while you speak. The two modes are exclusive: in
+captions mode the *Gemini Translated Audio* source stays silent.
 
 ## Getting a Gemini API key
 
@@ -128,6 +133,11 @@ Windows is the tested platform; see the note under *Install*. Current behavior:
   display, per-sentence failure isolation, hold-to-clear, automatic reconnect
   before the Live API's 10-minute session cap. See
   [`docs/specs/001-caption-translation-pipeline.md`](docs/specs/001-caption-translation-pipeline.md).
+- ✅ **Caption text box limits**: sentences are wrapped to a configurable width
+  (CJK-aware) and line count so the text source never overflows; over-long
+  sentences are cut with `…` and logged; the translation prompt is asked to stay
+  within the box. See
+  [`docs/specs/002-caption-text-box-limits.md`](docs/specs/002-caption-text-box-limits.md).
 - ✅ Reconnect with exponential backoff; live API-key / target-language changes.
 - ✅ Event-driven push output with a bounded scheduling lead (~600 ms) to ride
   out the model's phrase-boundary delivery jitter.
@@ -193,13 +203,18 @@ closed**:
    Linux: *Text (FreeType 2)*) to your scene and style it as you like. In the
    filter set **Output** to *Translated captions*, pick that source under
    **Caption Text Source**, and optionally a second text source under **Source
-   Transcript Text Source** to show what was recognized. **Caption Lines** (1–4)
-   and **Caption Hold (seconds)** (1–30) control how many sentences stay on
-   screen and for how long; **Custom Vocabulary** takes comma-separated names or
-   terms to bias recognition. The *Gemini Translated Audio* source is not needed
-   in this mode. Until a caption source is chosen the status reads *Set a
-   caption text source to show captions*; a misspelled name shows *Caption text
-   source "…" not found*.
+   Transcript Text Source** to show what was recognized. **Caption Lines**
+   (1–6, default 2) and **Max Characters per Line** (10–120, default 60; CJK
+   characters count as 2) define the text box the plugin wraps into — the
+   defaults fit a 1920×1080 scene at font size 48, i.e. about 30 Hangul or 60
+   Latin characters per line. **Caption Hold (seconds)** (1–30) sets how long
+   the last line stays; **Custom Vocabulary** takes comma-separated names or
+   terms to bias recognition. On the text source itself leave *Word wrap* and
+   *Use custom text extents* **off** (the plugin already wraps, and a second
+   wrap would split lines twice) and set the horizontal alignment to center.
+   The *Gemini Translated Audio* source is not needed in this mode. Until a
+   caption source is chosen the status reads *Set a caption text source to show
+   captions*; a misspelled name shows *Caption text source "…" not found*.
 
 ## Remote control (OBS WebSocket)
 
@@ -226,7 +241,9 @@ plugin support needed:
 | `output_mode` | string | `speech` (default) or `captions`; switching stops one session and starts the other |
 | `caption_text_source` | string | name of the text source that receives translated captions (captions mode) |
 | `caption_source_text_source` | string | optional text source for the source-language transcript; empty disables it |
-| `caption_max_segments` | int | sentences kept on screen, clamped to 1-4 |
+| `caption_max_lines` | int | lines kept on screen, clamped to 1-6 |
+| `caption_max_chars_per_line` | int | line width in display units (CJK = 2), clamped to 10-120 |
+| `caption_max_segments` | int | legacy (pre-002): read as the line count only when `caption_max_lines` has never been set |
 | `caption_hold_seconds` | number | seconds after the last sentence before the caption source is cleared, clamped to 1-30 |
 | `caption_custom_vocabulary` | string | comma-separated phrases passed to the transcriber as custom vocabulary |
 
@@ -319,9 +336,9 @@ ctest --test-dir build_x64 -R "<test case name>" --output-on-failure
 
 The `unit-tests` target covers the pure logic (base64, ring buffer, backoff,
 audio conversion, audio pacing/timestamper, Gemini protocol parsing, caption
-protocol, translate request/response, caption composer) and does **not**
+protocol, translate request/response, caption composer, caption wrapping) and does **not**
 require libobs. The caption modules also build as standalone binaries
-(`caption-protocol`, `translate-protocol`, `caption-composer`; ctest names are
+(`caption-protocol`, `translate-protocol`, `caption-composer`, `caption-wrap`; ctest names are
 prefixed with `<module>/`) so one module can be iterated on without compiling
 the rest.
 
@@ -337,7 +354,8 @@ src/
   caption-session.*      captions mode: STT WebSocket + translate workers + sinks
   caption-protocol.*     build/parse gemini-3.5-transcribe-live messages
   translate-protocol.*   Flash-Lite generateContent request/response
-  caption-composer.*     in-order caption window + hold timer (pure logic)
+  caption-composer.*     in-order line window, truncation + hold timer (pure logic)
+  caption-wrap.*         display-width (CJK = 2) line wrapping (pure logic)
   caption-output.*       writes caption text into an OBS text source by name
   audio-pacing.*         OutputTimestamper (contiguous, lead-bounded timestamps)
   audio-convert.*        PCM downmix / conversion / chunking

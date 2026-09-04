@@ -88,7 +88,7 @@
 | `output_mode` | string | `speech` | `speech` = 기존 speech-to-speech, `captions` = 이 스펙의 자막 파이프라인 |
 | `caption_text_source` | string | `""` | 번역 자막을 쓸 텍스트 소스 이름. 빈 값이면 자막을 쓰지 않는다(상태 텍스트로 안내). |
 | `caption_source_text_source` | string | `""` | 원문(interim/final) 전사를 쓸 텍스트 소스 이름. 선택. |
-| `caption_max_segments` | int | `2` | 자막 소스에 유지할 최근 세그먼트 수. 범위 1–4. 줄바꿈(`\n`)으로 이어 붙인다. |
+| `caption_max_segments` | int | `2` | 자막 소스에 유지할 최근 세그먼트 수. 범위 1–4. 줄바꿈(`\n`)으로 이어 붙인다. 줄 폭·줄 수 기반 박스 제한과 `caption_max_lines`로의 대체는 `002-caption-text-box-limits` 참조. |
 | `caption_hold_seconds` | double | `4.0` | 마지막 표시 갱신 후 자막을 비우기까지의 시간. 범위 1–30. |
 | `caption_custom_vocabulary` | string | `""` | 쉼표로 구분한 편향 어휘. 빈 값이면 setup에서 생략한다. |
 
@@ -137,6 +137,8 @@ UI: `output_mode`는 콤보(`Translated speech` / `Translated captions`). 텍스
   드롭 + 로그, 세션 유지(성공 기준 7).
 
 ### 4.5 자막 구성기 (`CaptionComposer`, 순수 로직)
+
+표시 창을 세그먼트 수가 아니라 줄 폭·줄 수로 제한하는 확장은 `002-caption-text-box-limits`가 다룬다.
 
 시계를 주입받는(`now_ms` 인자) 순수 클래스로 두어 단위 테스트한다.
 

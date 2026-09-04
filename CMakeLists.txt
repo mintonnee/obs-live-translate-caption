@@ -54,6 +54,7 @@ add_library(${CMAKE_PROJECT_NAME} MODULE
   src/caption-protocol.cpp
   src/translate-protocol.cpp
   src/caption-composer.cpp
+  src/caption-wrap.cpp
   src/caption-session.cpp
   src/caption-output.cpp
 )

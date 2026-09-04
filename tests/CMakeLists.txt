@@ -20,6 +20,7 @@ add_executable(unit-tests
   test-caption-protocol.cpp
   test-translate-protocol.cpp
   test-caption-composer.cpp
+  test-caption-wrap.cpp
   ${CMAKE_SOURCE_DIR}/src/audio-convert.cpp
   ${CMAKE_SOURCE_DIR}/src/audio-pacing.cpp
   ${CMAKE_SOURCE_DIR}/src/backoff.cpp
@@ -31,6 +32,7 @@ add_executable(unit-tests
   ${CMAKE_SOURCE_DIR}/src/caption-protocol.cpp
   ${CMAKE_SOURCE_DIR}/src/translate-protocol.cpp
   ${CMAKE_SOURCE_DIR}/src/caption-composer.cpp
+  ${CMAKE_SOURCE_DIR}/src/caption-wrap.cpp
 )
 target_include_directories(unit-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(unit-tests PRIVATE Catch2::Catch2 nlohmann_json::nlohmann_json)
@@ -58,5 +60,9 @@ add_module_test(translate-protocol
   ${CMAKE_SOURCE_DIR}/src/translate-protocol.cpp
 )
 add_module_test(caption-composer
+  ${CMAKE_SOURCE_DIR}/src/caption-wrap.cpp
   ${CMAKE_SOURCE_DIR}/src/caption-composer.cpp
+)
+add_module_test(caption-wrap
+  ${CMAKE_SOURCE_DIR}/src/caption-wrap.cpp
 )

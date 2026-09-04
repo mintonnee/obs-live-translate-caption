@@ -24,6 +24,10 @@ struct TranslateRequest {
     // context only; the model must translate only `text`.
     std::vector<std::string> context;
     std::string text; // the source segment to translate
+    // Spec 002 §4.5: when > 0, the system instruction asks to keep the
+    // translation within about this many characters (lines x width). 0 = no
+    // length hint.
+    int max_chars = 0;
 };
 
 // Builds the JSON body:

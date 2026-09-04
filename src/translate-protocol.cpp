@@ -21,6 +21,11 @@ std::string build_system_instruction(const TranslateRequest &req)
          "the concise style of an on-screen subtitle. Only translate the text in "
          "the \"Translate:\" block below; any \"Context:\" block is prior dialogue "
          "provided for reference only and must not be translated or echoed.";
+    if (req.max_chars > 0) {
+        s += " Keep the translation within about ";
+        s += std::to_string(req.max_chars);
+        s += " characters when possible; prefer shorter wording over dropping meaning.";
+    }
     return s;
 }
 

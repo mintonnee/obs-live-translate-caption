@@ -59,6 +59,62 @@ TEST_CASE("system instruction handles input already in the target language")
     REQUIRE(instr.find("cleaned up as-is") != std::string::npos);
 }
 
+TEST_CASE("system instruction adds the length hint when max_chars is positive")
+{
+    TranslateRequest req;
+    req.target_code = "ja";
+    req.target_name = "Japanese";
+    req.text = "hello";
+    req.max_chars = 80;
+
+    std::string body = build_translate_request(req);
+    json j = json::parse(body);
+    std::string instr = j["system_instruction"]["parts"][0]["text"].get<std::string>();
+
+    REQUIRE(instr.find("80 characters") != std::string::npos);
+    REQUIRE(instr.find("Keep the translation within about 80 characters when possible; "
+                        "prefer shorter wording over dropping meaning.") != std::string::npos);
+    // Existing behaviour must still hold when max_chars is set.
+    REQUIRE(instr.find("Japanese (ja)") != std::string::npos);
+    REQUIRE(instr.find("no quotes") != std::string::npos);
+    REQUIRE(j["contents"].size() == 1);
+    REQUIRE(j["contents"].back()["role"] == "user");
+    REQUIRE(!j["generationConfig"].contains("thinkingConfig"));
+    REQUIRE(body.find("temperature") == std::string::npos);
+    REQUIRE(body.find("topP") == std::string::npos);
+    REQUIRE(body.find("topK") == std::string::npos);
+}
+
+TEST_CASE("system instruction omits the length hint when max_chars is zero")
+{
+    TranslateRequest req;
+    req.target_code = "ja";
+    req.target_name = "Japanese";
+    req.text = "hello";
+    req.max_chars = 0;
+
+    std::string body = build_translate_request(req);
+    json j = json::parse(body);
+    std::string instr = j["system_instruction"]["parts"][0]["text"].get<std::string>();
+
+    REQUIRE(instr.find("characters") == std::string::npos);
+}
+
+TEST_CASE("system instruction omits the length hint when max_chars is negative")
+{
+    TranslateRequest req;
+    req.target_code = "ja";
+    req.target_name = "Japanese";
+    req.text = "hello";
+    req.max_chars = -5;
+
+    std::string body = build_translate_request(req);
+    json j = json::parse(body);
+    std::string instr = j["system_instruction"]["parts"][0]["text"].get<std::string>();
+
+    REQUIRE(instr.find("characters") == std::string::npos);
+}
+
 TEST_CASE("contents has exactly one user-role entry")
 {
     TranslateRequest req;

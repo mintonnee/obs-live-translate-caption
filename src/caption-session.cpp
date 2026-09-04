@@ -1,6 +1,7 @@
 #include "caption-session.hpp"
 #include "backoff.hpp"
 #include "caption-protocol.hpp"
+#include "caption-wrap.hpp"
 #include "live-protocol.hpp"
 #include "translate-protocol.hpp"
 #include <ixwebsocket/IXHttpClient.h>
@@ -13,7 +14,8 @@
 // Caption (STT + translate) session. Mirrors TranslationSession's singleton /
 // worker / backoff structure, but drives a text pipeline instead of audio:
 // WebSocket -> transcripts -> translate job queue -> CaptionComposer -> sinks.
-// Spec: docs/specs/001-caption-translation-pipeline.md §4.3, §4.4, §4.7.
+// Spec: docs/specs/001-caption-translation-pipeline.md §4.3, §4.4, §4.7;
+// docs/specs/002-caption-text-box-limits.md §4.4, §4.5, criteria 8, 9.
 
 namespace lt {
 
@@ -124,7 +126,8 @@ void CaptionSession::configure(const CaptionConfig &cfg)
         if (hold < 0.0) hold = 0.0;
         if (hold > 30000.0) hold = 30000.0;
         CaptionComposerConfig cc;
-        cc.max_segments = cfg.max_segments;
+        cc.max_lines = cfg.max_lines;
+        cc.max_width = cfg.max_width;
         cc.hold_ms = static_cast<uint64_t>(hold);
         std::lock_guard<std::mutex> lk(out_mtx_);
         composer_.set_config(cc);
@@ -132,9 +135,9 @@ void CaptionSession::configure(const CaptionConfig &cfg)
 
     blog(LOG_INFO,
          "[live-translate] configuring caption session: target=%s vocab=%zu "
-         "max_segments=%d hold=%.1fs",
-         cfg.target_lang.c_str(), cfg.custom_vocabulary.size(), cfg.max_segments,
-         cfg.hold_seconds);
+         "max_lines=%d max_width=%d hold=%.1fs",
+         cfg.target_lang.c_str(), cfg.custom_vocabulary.size(), cfg.max_lines,
+         cfg.max_width, cfg.hold_seconds);
 
     if (reconnect) config_changed_ = true;
 
@@ -223,6 +226,13 @@ bool CaptionSession::pop_job(TranslateJob &job)
     return true;
 }
 
+void CaptionSession::box_config(int &max_lines, int &max_width)
+{
+    std::lock_guard<std::mutex> lk(cfg_mtx_);
+    max_lines = cfg_.max_lines;
+    max_width = cfg_.max_width;
+}
+
 void CaptionSession::render_and_publish()
 {
     // Hold publish_mtx_ across render + sink so a concurrent caller cannot
@@ -230,24 +240,36 @@ void CaptionSession::render_and_publish()
     std::lock_guard<std::mutex> plk(publish_mtx_);
     std::optional<std::string> v;
     TextSink sink;
+    std::vector<CaptionTruncation> truncations;
     {
         std::lock_guard<std::mutex> lk(out_mtx_);
         v = composer_.render(now_ms());
-        if (!v) return;
+        // Collected even when the display did not change, so a truncation is
+        // never silently dropped; blog() must not run under out_mtx_.
+        truncations = composer_.take_truncations();
         sink = caption_sink_;
     }
-    if (sink) sink(*v);
+    if (v && sink) sink(*v);
+    for (const CaptionTruncation &t : truncations)
+        blog(LOG_INFO,
+             "[live-translate] caption seg=%llu truncated lines=%d kept=%d",
+             static_cast<unsigned long long>(t.seq), t.lines, t.kept);
 }
 
 void CaptionSession::publish_source_text(const std::string &text, bool force)
 {
+    // Config first, then out_mtx_ (see box_config()).
+    int max_lines = 2, max_width = 60;
+    box_config(max_lines, max_width);
+
     std::lock_guard<std::mutex> plk(publish_mtx_);
     TextSink sink;
     {
         std::lock_guard<std::mutex> lk(out_mtx_);
         uint64_t now = now_ms();
         if (!force && elapsed_ms(last_source_publish_ms_, now) < kSourceCoalesceMs) {
-            // Keep only the latest interim; the tick loop flushes it.
+            // Keep only the latest interim, unwrapped: flush_pending_source()
+            // wraps it with the config in effect when it actually goes out.
             pending_interim_ = text;
             has_pending_interim_ = true;
             return;
@@ -257,11 +279,14 @@ void CaptionSession::publish_source_text(const std::string &text, bool force)
         has_pending_interim_ = false;
         sink = source_sink_;
     }
-    if (sink) sink(text);
+    if (sink) sink(join_lines(wrap_tail(text, max_width, max_lines)));
 }
 
 void CaptionSession::flush_pending_source()
 {
+    int max_lines = 2, max_width = 60;
+    box_config(max_lines, max_width);
+
     std::lock_guard<std::mutex> plk(publish_mtx_);
     std::string text;
     TextSink sink;
@@ -276,7 +301,7 @@ void CaptionSession::flush_pending_source()
         last_source_publish_ms_ = now;
         sink = source_sink_;
     }
-    if (sink) sink(text);
+    if (sink) sink(join_lines(wrap_tail(text, max_width, max_lines)));
 }
 
 void CaptionSession::reset_source_state()
@@ -477,11 +502,14 @@ void CaptionSession::translate_worker()
     TranslateJob job;
     while (pop_job(job)) {
         std::string key, lang, name;
+        int max_lines = 2, max_width = 60;
         {
             std::lock_guard<std::mutex> lk(cfg_mtx_);
             key = cfg_.api_key;
             lang = cfg_.target_lang;
             name = cfg_.target_name;
+            max_lines = cfg_.max_lines;
+            max_width = cfg_.max_width;
         }
 
         TranslateRequest req;
@@ -489,6 +517,8 @@ void CaptionSession::translate_worker()
         req.target_name = name;
         req.context = job.context;
         req.text = job.text;
+        // Length hint so truncation stays rare (spec 002 §4.5).
+        req.max_chars = max_lines * max_width;
         std::string body = build_translate_request(req);
 
         auto args = client.createRequest(url, ix::HttpClient::kPost);

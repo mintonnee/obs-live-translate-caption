@@ -20,7 +20,8 @@
 // Display is delegated to sinks installed by the filter (caption-output.cpp),
 // so this class knows nothing about OBS text sources.
 // Spec: docs/specs/001-caption-translation-pipeline.md §4.3, §4.4, §4.7,
-// criteria 7, 8, 12.
+// criteria 7, 8, 12; docs/specs/002-caption-text-box-limits.md §4.4, §4.5,
+// criteria 8, 9.
 namespace lt {
 
 struct CaptionConfig {
@@ -28,7 +29,8 @@ struct CaptionConfig {
     std::string target_lang;                    // BCP-47 code from languages.hpp
     std::string target_name;                    // English name for the prompt
     std::vector<std::string> custom_vocabulary; // empty = omitted from setup
-    int max_segments = 2;                       // 1-4
+    int max_lines = 2;                          // displayed lines, 1-6
+    int max_width = 60;                         // line width in display units, 10-120
     double hold_seconds = 4.0;                  // 1-30
 };
 
@@ -85,9 +87,16 @@ private:
     void render_and_publish();
     // Publishes source-transcript text; interim updates are coalesced to at
     // most one sink call per kSourceCoalesceMs, finals go out immediately.
+    // The text handed to the sink is wrap_tail()'d to the configured
+    // max_width x max_lines box, so the newest words stay visible (spec 002
+    // §4.4, criterion 9). The coalescing buffer keeps the raw text.
     void publish_source_text(const std::string &text, bool force);
     void flush_pending_source(); // sends a coalesced interim once its window elapsed
     void reset_source_state();   // drops interim bookkeeping (reconnect / stop)
+
+    // Current text-box limits. Takes cfg_mtx_ only: the lock order is cfg_mtx_
+    // first, then out_mtx_, and the two are never held at the same time.
+    void box_config(int &max_lines, int &max_width);
 
     // Proactive reconnect before the Live API's 10-minute session cap.
     static constexpr uint64_t kSessionMaxMs = 9 * 60 * 1000;
