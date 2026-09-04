@@ -79,10 +79,11 @@ std::string trim(const std::string &s)
 
 } // namespace
 
-std::string translate_endpoint_url()
+std::string translate_endpoint_url(std::string_view model)
 {
     return std::string("https://generativelanguage.googleapis.com/v1beta/models/") +
-           kTranslateModel + ":generateContent";
+           std::string(model.empty() ? std::string_view(kTranslateModel) : model) +
+           ":generateContent";
 }
 
 std::string build_translate_request(const TranslateRequest &req)

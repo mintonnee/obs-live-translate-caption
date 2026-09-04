@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <string_view>
 #include <vector>
 
 // generateContent request builder / response parser for segment translation via
@@ -15,7 +16,9 @@ constexpr const char *kTranslateModel = "gemini-3.1-flash-lite";
 
 // "https://generativelanguage.googleapis.com/v1beta/models/<kTranslateModel>:generateContent"
 // The API key is sent as the "x-goog-api-key" header, never in the URL.
-std::string translate_endpoint_url();
+// `model` is a generateContent model id such as "gemini-3.1-flash-lite"; empty
+// selects kTranslateModel. The id is used verbatim in the URL path.
+std::string translate_endpoint_url(std::string_view model = kTranslateModel);
 
 struct TranslateRequest {
     std::string target_code; // BCP-47, e.g. "ja"

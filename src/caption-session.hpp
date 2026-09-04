@@ -29,6 +29,7 @@ struct CaptionConfig {
     std::string target_lang;                    // BCP-47 code from languages.hpp
     std::string target_name;                    // English name for the prompt
     std::vector<std::string> custom_vocabulary; // empty = omitted from setup
+    std::string translate_model;                // generateContent model id; empty = default
     int max_lines = 2;                          // displayed lines, 1-6
     int max_width = 60;                         // line width in display units, 10-120
     double hold_seconds = 4.0;                  // 1-30

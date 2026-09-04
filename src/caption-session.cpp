@@ -527,11 +527,11 @@ void CaptionSession::translate_worker()
     // One client per thread: ix::HttpClient owns a single socket and is not
     // meant to be shared across concurrent requests.
     ix::HttpClient client(false);
-    const std::string url = translate_endpoint_url();
+    // The model (and so the URL) is read per job: it can change live.
 
     TranslateJob job;
     while (pop_job(job)) {
-        std::string key, lang, name;
+        std::string key, lang, name, model;
         std::vector<std::string> glossary;
         int max_lines = 2, max_width = 60;
         {
@@ -540,6 +540,7 @@ void CaptionSession::translate_worker()
             lang = cfg_.target_lang;
             name = cfg_.target_name;
             glossary = cfg_.custom_vocabulary;
+            model = cfg_.translate_model;
             max_lines = cfg_.max_lines;
             max_width = cfg_.max_width;
         }
@@ -554,6 +555,7 @@ void CaptionSession::translate_worker()
         // Same terms the transcriber is biased toward, so names survive translation.
         req.glossary = std::move(glossary);
         std::string body = build_translate_request(req);
+        const std::string url = translate_endpoint_url(model);
 
         auto args = client.createRequest(url, ix::HttpClient::kPost);
         args->extraHeaders["x-goog-api-key"] = key;

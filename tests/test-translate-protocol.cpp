@@ -12,6 +12,11 @@ TEST_CASE("translate endpoint url matches the documented generateContent path")
             "gemini-3.1-flash-lite:generateContent");
     REQUIRE(std::string(kTranslateModel) == "gemini-3.1-flash-lite");
     REQUIRE(translate_endpoint_url().find("key=") == std::string::npos);
+    // Model selector: the id goes verbatim into the path; empty falls back.
+    REQUIRE(translate_endpoint_url("gemini-3.5-flash") ==
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            "gemini-3.5-flash:generateContent");
+    REQUIRE(translate_endpoint_url("") == translate_endpoint_url());
 }
 
 TEST_CASE("system instruction names the target language and code")

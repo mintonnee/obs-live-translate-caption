@@ -111,7 +111,8 @@ Notes:
 - The key is stored **in plaintext** in your scene-collection file — don't share
   that file.
 - Usage is billed per Google's pricing: `gemini-3.5-live-translate-preview`
-  in speech mode, `gemini-3.5-transcribe-live` plus `gemini-3.1-flash-lite` in
+  in speech mode, `gemini-3.5-transcribe-live` plus the selected translation
+  model (default `gemini-3.1-flash-lite`) in
   captions mode. Check current quotas and pricing in AI Studio
   ([pricing](https://ai.google.dev/gemini-api/docs/pricing)).
 
@@ -211,6 +212,10 @@ closed**:
    the last line stays; **Custom Vocabulary** takes comma-separated names or
    terms to bias recognition and is also handed to the translator as a
    glossary, so those names keep their spelling instead of being translated.
+   **Translation Model** picks the generateContent model (default
+   `gemini-3.1-flash-lite`; the list is editable, so any model id your account
+   can use works — an unknown id shows up as `translate failed: HTTP 404` in
+   the log). Non-Lite models think longer by default, so expect more latency.
    On the text source itself leave *Word wrap* and
    *Use custom text extents* **off** (the plugin already wraps, and a second
    wrap would split lines twice) and set the horizontal alignment to center.
@@ -248,6 +253,7 @@ plugin support needed:
 | `caption_max_segments` | int | legacy (pre-002): read as the line count only when `caption_max_lines` has never been set |
 | `caption_hold_seconds` | number | seconds after the last sentence before the caption source is cleared, clamped to 1-30 |
 | `caption_custom_vocabulary` | string | comma-separated phrases passed to the transcriber as custom vocabulary and to the translator as a keep-as-is glossary |
+| `translate_model` | string | generateContent model id used for translation (default `gemini-3.1-flash-lite`); any id the account can access, e.g. `gemini-3.5-flash-lite`, `gemini-flash-lite-latest`; applies from the next sentence |
 
 Notes:
 

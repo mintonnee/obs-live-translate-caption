@@ -91,6 +91,7 @@
 | `caption_max_segments` | int | `2` | 자막 소스에 유지할 최근 세그먼트 수. 범위 1–4. 줄바꿈(`\n`)으로 이어 붙인다. 줄 폭·줄 수 기반 박스 제한과 `caption_max_lines`로의 대체는 `002-caption-text-box-limits` 참조. |
 | `caption_hold_seconds` | double | `4.0` | 마지막 표시 갱신 후 자막을 비우기까지의 시간. 범위 1–30. |
 | `caption_custom_vocabulary` | string | `""` | 쉼표로 구분한 편향 어휘. 빈 값이면 setup에서 생략한다. |
+| `translate_model` | string | `gemini-3.1-flash-lite` | 번역에 쓸 generateContent 모델 id. 편집 가능한 콤보(`gemini-3.1-flash-lite`, `gemini-3.5-flash-lite`, `gemini-3.5-flash`, `gemini-flash-lite-latest`, `gemini-flash-latest`)이며 목록 밖 id도 입력 가능. 재연결 없이 다음 문장부터 적용. 잘못된 id는 `translate failed: HTTP 404` 로그로 드러난다(2026-09-05 추가). |
 
 UI: `output_mode`는 콤보(`Translated speech` / `Translated captions`). 텍스트 소스 두 항목은
 `obs_enum_sources`로 unversioned id가 `text_gdiplus`/`text_ft2_source`인 소스 이름을 나열하는 콤보로 채우되,

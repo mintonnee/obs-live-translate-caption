@@ -1,6 +1,7 @@
 #include "audio-convert.hpp"
 #include "caption-output.hpp"
 #include "caption-session.hpp"
+#include "translate-protocol.hpp"
 #include "languages.hpp"
 #include "translation-session.hpp"
 #include <cstring>
@@ -29,6 +30,11 @@ constexpr double kMinCaptionHoldSeconds = 1.0;
 constexpr double kMaxCaptionHoldSeconds = 30.0;
 constexpr const char *kModeSpeech = "speech";
 constexpr const char *kModeCaptions = "captions";
+// Translation models offered in the properties combo (the field stays editable).
+constexpr const char *kTranslateModelChoices[] = {
+    "gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.5-flash",
+    "gemini-flash-lite-latest", "gemini-flash-latest",
+};
 
 struct FilterData {
     obs_source_t *context = nullptr;
@@ -49,6 +55,7 @@ struct FilterData {
     int caption_max_width = kDefaultCaptionWidth;
     double caption_hold_seconds = 4.0;
     std::string caption_custom_vocabulary;
+    std::string translate_model; // generateContent model id, "" = kTranslateModel
     bool caption_active = false; // true iff this filter drives the caption session
 };
 
@@ -110,6 +117,7 @@ lt::CaptionConfig make_caption_config(const FilterData *d)
     cfg.target_lang = d->target_lang;
     cfg.target_name = target_language_name(d->target_lang);
     cfg.custom_vocabulary = split_custom_vocabulary(d->caption_custom_vocabulary);
+    cfg.translate_model = d->translate_model;
     cfg.max_lines = d->caption_max_lines;
     cfg.max_width = d->caption_max_width;
     cfg.hold_seconds = d->caption_hold_seconds;
@@ -239,6 +247,7 @@ void filter_update(void *data, obs_data_t *settings)
     d->caption_hold_seconds =
         std::clamp(obs_data_get_double(settings, "caption_hold_seconds"),
                    kMinCaptionHoldSeconds, kMaxCaptionHoldSeconds);
+    d->translate_model = obs_data_get_string(settings, "translate_model");
     d->caption_custom_vocabulary =
         obs_data_get_string(settings, "caption_custom_vocabulary");
 
@@ -400,6 +409,7 @@ void apply_mode_enabled_state(obs_properties_t *props, bool captions)
     set_property_enabled(props, "caption_max_chars_per_line", captions);
     set_property_enabled(props, "caption_hold_seconds", captions);
     set_property_enabled(props, "caption_custom_vocabulary", captions);
+    set_property_enabled(props, "translate_model", captions);
 }
 
 bool output_mode_modified(obs_properties_t *props, obs_property_t *,
@@ -507,6 +517,14 @@ obs_properties_t *filter_properties(void *data)
         props, "caption_custom_vocabulary",
         obs_module_text("Custom Vocabulary (comma-separated)"), OBS_TEXT_DEFAULT);
 
+    // Editable so a model id that is not listed yet can be typed in. Ids come
+    // from the Gemini model docs; availability depends on the account.
+    obs_property_t *model_list = obs_properties_add_list(
+        props, "translate_model", obs_module_text("Translation Model"),
+        OBS_COMBO_TYPE_EDITABLE, OBS_COMBO_FORMAT_STRING);
+    for (const char *id : kTranslateModelChoices)
+        obs_property_list_add_string(model_list, id, id);
+
     obs_properties_add_text(props, "api_key", obs_module_text("Gemini API Key"),
                             OBS_TEXT_PASSWORD);
     obs_properties_add_text(
@@ -538,6 +556,7 @@ void filter_defaults(obs_data_t *settings)
     // obs_data_has_user_value() to detect a stored legacy value.
     obs_data_set_default_double(settings, "caption_hold_seconds", 4.0);
     obs_data_set_default_string(settings, "caption_custom_vocabulary", "");
+    obs_data_set_default_string(settings, "translate_model", lt::kTranslateModel);
 }
 
 void filter_get_status(void *data, obs_data_t *settings)
