@@ -2,6 +2,7 @@ name: Release
 
 # Push a version tag (e.g. v0.1.3) to build the plugin on Windows, macOS and
 # Linux runners and attach ready-to-install packages to a single GitHub Release.
+# Tags with a suffix (v1.0.0-rc1) are published as pre-releases.
 on:
   push:
     tags:
@@ -33,7 +34,10 @@ jobs:
           # drop-in zip
           New-Item -ItemType Directory -Force -Path "stage/obs-plugins/64bit" | Out-Null
           Copy-Item $dll "stage/obs-plugins/64bit/"
-          "Close OBS, then copy the obs-plugins folder into your OBS Studio install directory (e.g. C:\Program Files\obs-studio\). The build is unsigned, so SmartScreen may warn." | Set-Content "stage/INSTALL.txt"
+          # UI strings (data/locale/*.ini) live under data/obs-plugins/<module>/ in an OBS install
+          New-Item -ItemType Directory -Force -Path "stage/data/obs-plugins/obs-live-translate-caption" | Out-Null
+          Copy-Item -Recurse "data/locale" "stage/data/obs-plugins/obs-live-translate-caption/"
+          "Close OBS, then copy the obs-plugins and data folders into your OBS Studio install directory (e.g. C:\Program Files\obs-studio\). The build is unsigned, so SmartScreen may warn." | Set-Content "stage/INSTALL.txt"
           Compress-Archive -Path "stage/*" -DestinationPath "dist/obs-live-translate-caption-$tag-windows-x64.zip" -Force
           # installer
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$ver" "installer\obs-live-translate-caption.iss"
@@ -96,8 +100,10 @@ jobs:
           tag="$GITHUB_REF_NAME"
           so=$(find build_x86_64 -maxdepth 4 -name 'obs-live-translate-caption.so' -type f | head -1)
           if [ -z "$so" ]; then echo "no .so found"; find build_x86_64 -name '*.so'; exit 1; fi
-          mkdir -p dist "stage/obs-live-translate-caption/bin/64bit"
+          mkdir -p dist "stage/obs-live-translate-caption/bin/64bit" "stage/obs-live-translate-caption/data"
           cp "$so" "stage/obs-live-translate-caption/bin/64bit/"
+          # UI strings; libobs looks for <plugin>/data/locale next to bin/ in user plugin dirs
+          cp -R data/locale "stage/obs-live-translate-caption/data/"
           cat > stage/INSTALL.txt <<'EOF'
           Close OBS, then copy the obs-live-translate-caption folder into:
             ~/.config/obs-studio/plugins/
@@ -125,5 +131,12 @@ jobs:
           set -e
           files=$(find artifacts -type f)
           echo "Attaching:"; echo "$files"
+          # A tag with a pre-release suffix (v1.0.0-rc1, v1.2.0-beta.2) is marked
+          # as a pre-release so it does not become the "Latest release".
+          prerelease=()
+          case "$GITHUB_REF_NAME" in
+            *-*) prerelease=(--prerelease) ;;
+          esac
           gh release create "$GITHUB_REF_NAME" $files \
-            -R "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+            -R "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes \
+            "${prerelease[@]}"
