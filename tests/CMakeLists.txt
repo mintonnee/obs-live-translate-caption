@@ -17,6 +17,8 @@ add_executable(unit-tests
   test-translate-protocol.cpp
   test-caption-composer.cpp
   test-caption-wrap.cpp
+  test-pause-policy.cpp
+  ${CMAKE_SOURCE_DIR}/src/pause-policy.cpp
   ${CMAKE_SOURCE_DIR}/src/audio-convert.cpp
   ${CMAKE_SOURCE_DIR}/src/backoff.cpp
   ${CMAKE_SOURCE_DIR}/src/base64.cpp
@@ -58,4 +60,11 @@ add_module_test(caption-composer
 )
 add_module_test(caption-wrap
   ${CMAKE_SOURCE_DIR}/src/caption-wrap.cpp
+)
+# Spec 004 slices S1 / S2.
+add_module_test(pause-policy
+  ${CMAKE_SOURCE_DIR}/src/pause-policy.cpp
+)
+add_module_test(ring-buffer
+  ${CMAKE_SOURCE_DIR}/src/ring-buffer.cpp
 )

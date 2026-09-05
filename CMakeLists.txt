@@ -14,6 +14,8 @@ include(helpers)
 option(BUILD_TESTS "Build unit tests" ON)
 
 find_package(libobs REQUIRED)
+# Streaming / recording / virtual-camera state for the auto-pause (spec 004 §4.5).
+find_package(obs-frontend-api REQUIRED)
 
 include(FetchContent)
 
@@ -51,9 +53,12 @@ add_library(${CMAKE_PROJECT_NAME} MODULE
   src/caption-wrap.cpp
   src/caption-session.cpp
   src/caption-output.cpp
+  src/pause-policy.cpp
+  src/output-state.cpp
 )
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE
   OBS::libobs
+  OBS::obs-frontend-api
   ixwebsocket
   nlohmann_json::nlohmann_json
   # bcrypt is a Windows crypto library needed by mbedTLS there; not on mac/Linux.

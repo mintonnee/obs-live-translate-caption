@@ -36,6 +36,19 @@ use whatever font, outline and position you set on that source. A second,
 optional text source can show the source-language transcript live (interim
 text while you speak, replaced by the final sentence).
 
+Streaming silence still costs money, so the session **pauses itself**. A
+fresh session does not connect at all until it hears something (*Paused
+(waiting for sound)*), and once connected, a mic that stays below the idle
+threshold for **Idle Timeout** (default 5 minutes) closes the WebSocket again
+(*Paused (idle)*). Audio keeps being buffered while paused; the first chunk
+above the threshold connects (about 1–2 s), and the last second before it is
+sent along, so the first words are not lost. To check that a key works, just
+say a word and watch the status turn *Connected*. Optionally the filter can also run **only while
+streaming, recording or the virtual camera is active** (*Paused (output
+inactive)* otherwise). Translation requests are only made for finalized
+sentences, so a paused or silent session costs nothing on that side. See
+[`docs/specs/004-idle-pause-and-output-gating.md`](docs/specs/004-idle-pause-and-output-gating.md).
+
 ```
 mic ─▶ [Gemini Translate Caption filter]
           resample 16 kHz mono → chunk → WebSocket ─▶ gemini-3.5-transcribe-live
@@ -108,6 +121,11 @@ Windows is the tested platform; see the note under *Install*. Current behavior:
 - ✅ **Custom vocabulary** biases recognition toward your proper nouns and is
   handed to the translator as a glossary; **Translation Model** is selectable.
 - ✅ Reconnect with exponential backoff; live API-key / target-language changes.
+- ✅ **Auto-pause**: the STT stream is closed after a configurable silence
+  timeout (default 5 min) and optionally whenever no stream / recording /
+  virtual camera is running, so an idle OBS does not keep billing audio; audio
+  is buffered through the pause and the first words after it are kept. See
+  [`docs/specs/004-idle-pause-and-output-gating.md`](docs/specs/004-idle-pause-and-output-gating.md).
 - ✅ Single-session by design. If a source has two *Gemini Translate Caption*
   filters, only the first runs; the extra is disabled with a warning in its
   properties (removing the first lets the other take over). Note: the plugin
@@ -167,8 +185,9 @@ Consequences when you switch:
 
 2. Add the **Gemini Translate Caption** filter to your microphone source
    (right-click the mic → *Filters* → **+** → *Gemini Translate Caption*). Paste
-   your API key and pick a target language. Once it connects the status reads
-   *Connected*. (The screenshot below predates the captions settings.)
+   your API key and pick a target language. The status reads *Paused (waiting
+   for sound)* until you say something, then *Connected*. (The screenshot
+   below predates the captions settings.)
 
    ![Gemini Translate Caption filter properties](screenshots/micro-filters.png)
 
@@ -192,6 +211,25 @@ Consequences when you switch:
    Until a caption source is chosen the status reads *Set a caption text source
    to show captions*; a misspelled name shows *Caption text source "…" not
    found*.
+
+4. Auto-pause settings (all apply live, no reconnect):
+   **Idle Timeout (seconds, 0 = never)** (0–1800, default 300) closes the STT
+   stream after that much silence; the status then reads *Paused (idle)* and
+   the next sound above the threshold reconnects. With a timeout set, a new
+   session also starts as *Paused (waiting for sound)* and only connects once
+   you speak, so an OBS left open costs nothing; set it to 0 to connect
+   immediately and never pause. **Idle Threshold (dBFS)**
+   (-90 to -20, default -45) is the level a 100 ms chunk must reach to count as
+   sound. To pick it, watch the OBS audio mixer meter while you are quiet and
+   set the threshold 5–10 dB above where it sits; if the meter idles above
+   -45 (fans, laptop mics) raise the threshold or the filter never pauses.
+   Putting an OBS **Noise Gate** filter *above* this one in the filter list
+   makes silence exactly zero, so any threshold works. After changing it, talk
+   at your normal volume and check the status stays *Connected*.
+   **Only run while streaming, recording or virtual camera is active** keeps the
+   session closed (*Paused (output inactive)*) until one of those outputs
+   starts; leave it off to test captions before going live. A paused session
+   still clears the caption after **Caption Hold**.
 
 ## Remote control (OBS WebSocket)
 
@@ -221,6 +259,9 @@ plugin support needed:
 | `caption_hold_seconds` | number | seconds after the last sentence before the caption source is cleared, clamped to 1-30 |
 | `caption_custom_vocabulary` | string | comma-separated phrases passed to the transcriber as custom vocabulary and to the translator as a keep-as-is glossary |
 | `translate_model` | string | generateContent model id used for translation (default `gemini-3.1-flash-lite`); any id the account can access, e.g. `gemini-3.5-flash-lite`, `gemini-flash-lite-latest`; applies from the next sentence |
+| `idle_timeout_seconds` | int | silence (below the threshold) before the STT stream is paused, clamped to 0-1800; `0` = never pause on silence. Setting it to `0` while paused resumes immediately |
+| `idle_threshold_dbfs` | number | chunk RMS level that counts as sound, clamped to -90 to -20 (0 dBFS = full-scale 16-bit RMS) |
+| `only_while_output_active` | bool | `true` keeps the session paused unless streaming, recording or the virtual camera is active |
 
 Notes:
 
@@ -230,10 +271,10 @@ Notes:
   first resets the filter to defaults — and since `api_key` has no default, that
   **clears the key and stops translation**.
 - Changing `target_lang` or the vocabulary reconnects the STT session, so
-  expect a brief gap; the caption box and model settings apply live.
+  expect a brief gap; the caption box, model and auto-pause settings apply live.
 - Keys of the removed speech-to-speech mode (`output_mode`, `echo_target`,
   `playback_delay`) are ignored if a client still sends them.
-- This is **set-only**. The runtime connection status (Connecting / Connected /
+- This is **set-only**. The runtime connection status (Connecting / Connected / Paused /
   API-key error) is not exposed over WebSocket — `GetSourceFilterSettings`
   returns the stored settings, not the live status.
 
@@ -325,7 +366,9 @@ the rest.
 src/
   plugin-main.cpp        module entry; registers the filter
   filter.cpp             mic filter: resample → chunk → feed the caption session
-  caption-session.*      STT WebSocket + translate workers + text sinks + reconnect
+  caption-session.*      STT WebSocket + translate workers + text sinks + reconnect + auto-pause
+  pause-policy.*         idle detection (dBFS threshold + timeout) and pause reason (pure logic)
+  output-state.*         streaming / recording / virtual-camera state via obs-frontend-api
   caption-protocol.*     build/parse gemini-3.5-transcribe-live messages + audio frames
   translate-protocol.*   Flash-Lite generateContent request/response
   caption-composer.*     in-order line window, truncation + hold timer (pure logic)
@@ -349,7 +392,10 @@ mbedTLS) · nlohmann/json · Catch2.
 
 - **Input** to Gemini: 16 kHz, 16-bit PCM, mono, little-endian, 100 ms chunks
   (`realtimeInput.audio`, `audio/pcm;rate=16000`, base64). The mic is streamed
-  continuously, silence included, so the model can finalize on pauses.
+  continuously, silence included, so the model can finalize on pauses. Only
+  a long idle stretch (default 5 min below -45 dBFS) or no active OBS output
+  closes the stream; audio input is billed per second, silence included, so
+  this is where the auto-pause saves money.
 - Speech-to-text: `models/gemini-3.5-transcribe-live` over the Live API
   WebSocket endpoint (`responseModalities: ["TEXT"]`, `inputAudioTranscription.mode:
   "SMART"`, `languageCodes: []` = auto-detect); interim text arrives as

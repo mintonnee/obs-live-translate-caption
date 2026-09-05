@@ -42,4 +42,13 @@ void ByteRingBuffer::clear()
     buf_.clear();
 }
 
+void ByteRingBuffer::keep_last(size_t bytes)
+{
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (buf_.size() > bytes) {
+        size_t drop = buf_.size() - bytes;
+        buf_.erase(buf_.begin(), buf_.begin() + drop);
+    }
+}
+
 }

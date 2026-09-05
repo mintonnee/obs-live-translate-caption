@@ -14,9 +14,10 @@
 검증 문장:
 
 ```text
-필터를 켜 둔 채 마이크가 5분(기본값) 동안 조용하면 상태가 "Paused (idle)"로 바뀌고 OBS 로그에
-"caption session paused: idle"과 "caption websocket closed"가 남으며, 다시 말을 시작하면 2초 안에
-"Connected"로 돌아와 그 첫 문장이 자막으로 나온다.
+필터를 켜면 상태가 "Paused (waiting for sound)"이고 아무것도 연결하지 않는다. 한마디 하면 2초 안에
+"Connected"가 되어 그 첫 문장이 자막으로 나온다. 이후 마이크가 5분(기본값) 동안 조용하면 상태가
+"Paused (idle)"로 바뀌고 OBS 로그에 "caption session paused: idle"과 "caption websocket closed"가
+남으며, 다시 말을 시작하면 2초 안에 "Connected"로 돌아온다.
 ```
 
 ### 목표
@@ -24,6 +25,7 @@
 | 영역 | 목표 |
 |---|---|
 | 유휴 일시정지 | 16 kHz PCM 청크의 RMS가 임계값(dBFS) 미만인 상태가 `idle_timeout_seconds`(기본 300) 동안 이어지면 WebSocket을 닫는다. 워커 스레드, 설정, 자막 구성기는 유지한다. |
+| 시작 대기 | 세션이 시작될 때(필터 생성, 키 입력, stop 뒤 재시작) 유휴 일시정지가 켜져 있으면 첫 소리를 들을 때까지 연결하지 않는다. 상태는 `Paused (waiting for sound)`다. 재연결(9분 회전, 끊김, 키·언어 변경)과 출력 켜짐에 의한 재개에는 적용하지 않는다. |
 | 재개 | 일시정지 중 임계값 이상인 청크가 한 번이라도 들어오면 즉시 재연결한다. 링 버퍼는 일시정지 중에도 계속 채우고, 재개 시 직전 1초(pre-roll)와 연결 대기 중 쌓인 오디오를 open 직후 한꺼번에 보낸다. |
 | 출력 연동 | `only_while_output_active`(기본 꺼짐)가 켜지면 방송·녹화·가상 카메라 중 하나라도 활성일 때만 연결한다. 상태는 `obs-frontend-api` 이벤트로 받는다. |
 | 표시 유지 | 일시정지 중에도 세션 틱은 돌아 자막·원문 소스의 hold 타임아웃이 정상적으로 소스를 비운다. |
@@ -41,6 +43,7 @@
 | 마이크 mute·소스 비활성(씬에 없음) 감지 | mute는 필터 뒤에서 적용되어 필터 오디오에 반영되지 않는다. mute된 마이크는 대개 조용하므로 유휴 타임아웃이 대신 처리한다. |
 | 일시정지 중 번역 큐 처리 중단 | 일시정지 시점에 남은 final 세그먼트의 번역은 그대로 끝낸다(문장당 1회 HTTP, 비용 미미). 큐를 버리면 마지막 문장이 사라진다. |
 | pre-roll 길이·연결 대기 버퍼 크기의 설정화 | 1초 pre-roll과 기존 5초 링 버퍼로 충분하다. 설정 항목이 늘어날 이유가 없다. |
+| 시작 대기의 별도 설정 키 | `idle_timeout_seconds = 0`이 유휴 일시정지와 시작 대기를 함께 끄므로 키 하나로 충분하다. 시작 대기만 따로 끌 이유가 나오면 그때 추가한다. |
 | 연결 상태의 WebSocket 노출(`GetSourceFilterSettings`) | `001` 비목표 유지(README "Remote control" 참고). |
 | macOS/Linux에서 frontend API 부재 시 대체 감지 | `obs-frontend-api`는 OBS Studio 세 플랫폼 모두에서 제공된다. frontend 없는 호스트(libobs 단독)는 `obs_frontend_*`가 false를 돌려주므로 출력 연동을 켜면 연결하지 않는다는 동작만 문서화한다. |
 
@@ -51,14 +54,16 @@
 3. `IdleDetector`: 무음 200 s → 신호 청크 1개 → 무음 200 s에서는 false, 이어서 무음 100 s를 더 넣으면 true다. 즉 신호 청크가 타이머를 리셋한다(단위 테스트).
 4. `IdleDetector`(timeout 0): 무음을 3600 s 넣어도 false다(단위 테스트).
 5. `IdleDetector`: idle 상태에서 신호 청크 1개가 들어오면 그 호출에서 즉시 false가 되고, `reset(now)` 호출도 타이머를 now 기준으로 되돌린다(단위 테스트).
+5a. `IdleDetector::start_idle(now)`(timeout 300 s): 직후 `idle()`이 true이고 `awaiting_signal()`이 true다. 무음 청크를 넣어도 true가 유지되고, 신호 청크 1개에 둘 다 false가 된다. timeout 0이면 `start_idle` 뒤에도 false다. `start_idle` 뒤 `configure(0)`을 하면 다음 무음 `feed`가 false를 돌려준다(단위 테스트).
 6. `resolve_pause(inputs)`: `only_while_output=false, output_active=false, idle=false` → `None`; `only_while_output=true, output_active=false, idle=false` → `OutputInactive`; `only_while_output=false, idle=true` → `Idle`; `only_while_output=true, output_active=false, idle=true` → `OutputInactive`(출력 사유 우선)(단위 테스트).
 7. `ByteRingBuffer::keep_last(n)`: 10,000바이트를 쓴 뒤 `keep_last(4000)`이면 `size()==4000`이고 읽은 내용이 마지막 4,000바이트와 같다. `keep_last`가 현재 크기 이상이면 아무것도 버리지 않는다(단위 테스트).
-8. 유휴 일시정지(수동): 기본 설정으로 마이크를 5분간 조용히 두면 로그에 `[live-translate] caption session paused: idle 300s`와 `caption websocket closed`가 남고 속성창 상태가 `Paused (idle)`이다. 이후 5분 더 두어도 `Connecting`/`reconnect` 로그가 추가되지 않는다.
+7a. 시작 대기(수동): 기본 설정으로 필터에 키를 넣으면 연결 없이 상태가 `Paused (waiting for sound)`이고 로그에 `caption session paused: waiting for sound`가 남는다. 한마디 하면 2초 안에 `Connected`가 되고 그 문장이 자막으로 나온다. `idle_timeout_seconds`가 0이면 예전처럼 곧바로 `Connecting`/`Connected`다.
+8. 유휴 일시정지(수동): 기준 7a 뒤 마이크를 5분간 조용히 두면 로그에 `[live-translate] caption session paused: idle 300s`와 `caption websocket closed`가 남고 속성창 상태가 `Paused (idle)`이다. 이후 5분 더 두어도 `Connecting`/`reconnect` 로그가 추가되지 않는다.
 9. 재개(수동): 기준 8 상태에서 문장을 말하면 2초 안에 상태가 `Connected`가 되고 로그에 `caption session resumed: audio`가 남으며, 그 첫 문장이 자막 소스에 나온다(앞 단어가 잘리지 않는다).
 10. 출력 연동(수동): `only_while_output_active`를 켜고 방송·녹화·가상 카메라를 모두 끄면 상태가 `Paused (output inactive)`이고 연결 로그가 없다. 녹화를 시작하면 2초 안에 `Connected`, 녹화를 멈추면 `Paused (output inactive)`로 돌아가고 `caption session paused: output inactive` 로그가 남는다. 가상 카메라만 켜도 같은 동작이다.
 11. 일시정지 중 표시 정리(수동): 자막이 화면에 있는 상태에서 녹화를 멈춰(기준 10 설정) 즉시 일시정지시키면, `caption_hold_seconds` 뒤에 자막·원문 소스가 비워진다.
 12. 원격 제어(수동): 기준 8 상태에서 `SetSourceFilterSettings`로 `{"idle_timeout_seconds": 0}`을 보내면 2초 안에 `Connected`가 된다. 방송·녹화가 꺼진 상태에서 `{"only_while_output_active": true}`를 보내면 `Paused (output inactive)`가 된다.
-13. 호환(수동): 세 키가 없는 기존 씬 컬렉션을 열면 필터가 이전처럼 곧바로 `Connected`가 되고, 속성창에 **Idle Timeout** 300, **Idle Threshold** -45, **Only while output is active** 꺼짐이 보인다.
+13. 호환(수동): 세 키가 없는 기존 씬 컬렉션을 열면 필터가 `Paused (waiting for sound)`로 시작해 첫 발화에 `Connected`가 되고, 속성창에 **Idle Timeout** 300, **Idle Threshold** -45, **Only while output is active** 꺼짐이 보인다.
 14. 임계값(수동): **Idle Threshold**를 -20 dBFS로 올리면 보통 말소리도 무음으로 판정되어 5분 뒤 일시정지되고, -90 dBFS로 내리면 마이크 노이즈 플로어만으로도 일시정지되지 않는다.
 15. 빌드/테스트: `cmake --build --preset windows-x64-vs2026`이 exit 0, `ctest --test-dir build_x64 -C RelWithDebInfo`가 전부 통과한다.
 
@@ -122,7 +127,10 @@ README "Remote control" 표에 세 키를, "Usage" 3단계에 세 항목 설명�
   - `bool feed(bool has_signal, uint64_t now_ms)`: 신호면 `last_signal_ms_ = now`이고 false.
     무음이면 `timeout_ms > 0 && now - last_signal_ms_ >= timeout_ms`를 돌려준다.
   - `void reset(uint64_t now_ms)`: 재개·연결·설정 변경 시 타이머를 now로 되돌린다.
-  - `bool idle() const`: 마지막 `feed` 결과.
+  - `void start_idle(uint64_t now_ms)`: "아직 소리를 못 들은" 유휴로 진입한다. timeout이 0이 아니면
+    다음 신호 청크까지 무음 `feed`가 true를 돌려준다. 신호 청크나 `reset`이 이 상태를 푼다.
+  - `bool idle() const`: 마지막 `feed` 결과. `bool awaiting_signal() const`: `start_idle` 뒤 아직
+    신호를 못 봤는지(상태 문구 분기용).
 - `enum class PauseReason { None, OutputInactive, Idle }`.
 - `struct PauseInputs { bool only_while_output; bool output_active; bool idle; }`,
   `PauseReason resolve_pause(const PauseInputs &)`: 출력 사유가 유휴 사유보다 우선한다(기준 6).
@@ -155,13 +163,20 @@ README "Remote control" 표에 세 키를, "Usage" 3단계에 세 항목 설명�
   - 대기 루프를 벗어나면 `resumed: <audio|output>` 로그를 남기고, `input_.keep_last(kResumePrerollBytes)`
     (1초 = 32,000바이트)로 오래된 무음을 버린 뒤 새 연결로 넘어간다. 연결 대기 중 쌓인 오디오는
     open 직후 기존 전송 루프가 청크 단위로 한꺼번에 보낸다(5초 용량을 넘긴 부분은 기존대로 버린다).
+  - 시작 대기: `configure()`가 워커를 새로 띄우는 시점에 `IdleDetector::start_idle(now)`를 불러
+    `idle_`을 true로 둔다. `run()`의 게이트가 이를 `Idle` 사유로 잡아 연결 없이 대기하고, 첫 신호
+    청크가 기존 재개 경로(pre-roll 포함)로 연결한다. 상태 문구와 로그는 detector의
+    `awaiting_signal()`이 참이면 `waiting for sound`, 아니면 `idle`이다. 재연결·출력 재개 경로는
+    `start_idle`을 부르지 않으므로 즉시 연결한다. 타임아웃이 0이면 `start_idle`이 아무것도 하지
+    않아 예전처럼 즉시 연결한다.
   - 재개·연결 open 시 `IdleDetector::reset(now)`. 출력이 켜져 재개될 때 마이크가 조용하면 타임아웃
     뒤 다시 유휴로 멈추는 것이 의도된 동작이다.
 - 설정 변경: `configure()`는 `idle_timeout_seconds`, `idle_threshold_dbfs`를 detector에 즉시
   반영한다. 타임아웃을 0으로 바꾸면 다음 `feed`에서 비유휴가 되어 재개된다(기준 12).
   `only_while_output_active`는 다음 틱의 `resolve_pause`에서 반영된다.
-- `stop()`은 detector·`idle_`·`output_active_`를 건드리지 않고(출력 상태는 플러그인 전역 사실),
-  기존처럼 상태를 `Idle`로 되돌린다. `filter_audio`의 `needs_start` 판정은 `is_running()` 기준이므로
+- `stop()`은 detector를 `reset(now)`하고 `idle_`을 false로 되돌린다: `stop()`이 링 버퍼를 비우므로
+  남은 유휴 플래그는 다음 세션이 청크를 보기도 전에 일시정지시키는 오탐이 된다(구현 중 결정).
+  `output_active_`는 플러그인 전역 사실이라 건드리지 않는다. 상태는 기존처럼 `Idle`로 되돌린다. `filter_audio`의 `needs_start` 판정은 `is_running()` 기준이므로
   일시정지 중에도 `running_`이 참이라 재시작 루프가 돌지 않는다.
 - 9분 선제 재연결은 연결 중에만 판정한다(`connected_at == 0`이면 건너뛴다, 기존 코드 그대로).
 - 번역 워커와 큐는 일시정지와 무관하게 동작한다(비목표 참고).
@@ -186,7 +201,7 @@ README "Remote control" 표에 세 키를, "Usage" 3단계에 세 항목 설명�
 
 | 시점 | 로그 |
 |---|---|
-| 일시정지 | `[live-translate] caption session paused: idle <timeout>s` / `paused: output inactive` |
+| 일시정지 | `[live-translate] caption session paused: idle <timeout>s` / `paused: waiting for sound` / `paused: output inactive` |
 | 재개 | `[live-translate] caption session resumed: audio` / `resumed: output` |
 | 출력 상태 변화 | `[live-translate] output active: true` / `false` |
 
@@ -196,12 +211,12 @@ README "Remote control" 표에 세 키를, "Usage" 3단계에 세 항목 설명�
 
 | 슬라이스 | 산출물 | 소유(수정 가능) 경로 | 수정 금지 경로 | 선행 조건 | 상태 |
 |---|---|---|---|---|---|
-| S0 스캐폴드 | `pause-policy.hpp` 계약 + 스텁, `ring-buffer.hpp` `keep_last` 선언 + 스텁, `CaptionConfig` 필드·`ConnStatus::Paused`·`set_output_active` 선언 + 스텁, `output-state.hpp` 계약, CMake(frontend-api 링크, 소스·테스트 타깃 `add_module_test(pause-policy)`, `add_module_test(ring-buffer)`) | `CMakeLists.txt`, `tests/CMakeLists.txt`, `src/pause-policy.hpp`, `src/pause-policy.cpp`(스텁), `tests/test-pause-policy.cpp`(스텁), `src/ring-buffer.hpp`, `src/ring-buffer.cpp`(스텁 추가만), `src/caption-session.hpp`, `src/caption-session.cpp`(스텁 추가만), `src/output-state.hpp` | 그 외 | 없음 | 미착수 |
-| S1 pause-policy | dBFS 변환, `IdleDetector`, `resolve_pause` + 테스트 | `src/pause-policy.cpp`, `tests/test-pause-policy.cpp` | 그 외 전부 | S0 | 미착수 |
-| S2 ring-buffer | `keep_last` 구현 + 테스트 | `src/ring-buffer.cpp`, `tests/test-ring-buffer.cpp` | 그 외 전부 | S0 | 미착수 |
-| S3 세션 일시정지 | 신호 판정, 대기 루프, pre-roll, 상태·로그 | `src/caption-session.cpp`, `src/caption-session.hpp`(private 멤버만) | `src/pause-policy.*`, `src/ring-buffer.*`, `src/filter.cpp` | S1, S2 | 미착수 |
-| S4 필터·출력 상태 | 설정 키/UI/clamp, `output-state.cpp`, `plugin-main` 훅 | `src/filter.cpp`, `src/output-state.cpp`, `src/plugin-main.cpp` | `src/caption-session.*`, `src/pause-policy.*` | S0 | 미착수 |
-| S5 문서 | README(How it works, Usage, Remote control, 로드맵), 스펙 상태 | `README.md`, `docs/specs/*` | `src/`, `tests/` | S3, S4 | 미착수 |
+| S0 스캐폴드 | `pause-policy.hpp` 계약 + 스텁, `ring-buffer.hpp` `keep_last` 선언 + 스텁, `CaptionConfig` 필드·`ConnStatus::Paused`·`set_output_active` 선언 + 스텁, `output-state.hpp` 계약, CMake(frontend-api 링크, 소스·테스트 타깃 `add_module_test(pause-policy)`, `add_module_test(ring-buffer)`) | `CMakeLists.txt`, `tests/CMakeLists.txt`, `src/pause-policy.hpp`, `src/pause-policy.cpp`(스텁), `tests/test-pause-policy.cpp`(스텁), `src/ring-buffer.hpp`, `src/ring-buffer.cpp`(스텁 추가만), `src/caption-session.hpp`, `src/caption-session.cpp`(스텁 추가만), `src/output-state.hpp` | 그 외 | 없음 | 완료 |
+| S1 pause-policy | dBFS 변환, `IdleDetector`, `resolve_pause` + 테스트 | `src/pause-policy.cpp`, `tests/test-pause-policy.cpp` | 그 외 전부 | S0 | 완료 |
+| S2 ring-buffer | `keep_last` 구현 + 테스트 | `src/ring-buffer.cpp`, `tests/test-ring-buffer.cpp` | 그 외 전부 | S0 | 완료 |
+| S3 세션 일시정지 | 신호 판정, 대기 루프, pre-roll, 상태·로그 | `src/caption-session.cpp`, `src/caption-session.hpp`(private 멤버만) | `src/pause-policy.*`, `src/ring-buffer.*`, `src/filter.cpp` | S1, S2 | 완료 |
+| S4 필터·출력 상태 | 설정 키/UI/clamp, `output-state.cpp`, `plugin-main` 훅 | `src/filter.cpp`, `src/output-state.cpp`, `src/plugin-main.cpp` | `src/caption-session.*`, `src/pause-policy.*` | S0 | 완료 |
+| S5 문서 | README(How it works, Usage, Remote control, 로드맵), 스펙 상태 | `README.md`, `docs/specs/*` | `src/`, `tests/` | S3, S4 | 완료 |
 
 S1, S2, S4는 S0 뒤에 병렬 가능하다. S3은 S1의 `pause-policy` 계약과 S2의 `keep_last`를 소비하므로
 둘 뒤에 시작한다. S5는 S3·S4 뒤 순차다. S0의 스텁은 컴파일만 되면 되고(반환값 `None`/false/no-op),

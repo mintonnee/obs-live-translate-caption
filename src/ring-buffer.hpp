@@ -15,6 +15,10 @@ public:
 
     size_t size();
     void clear();
+    // Drops the oldest bytes so at most `bytes` remain (no-op when the buffer
+    // already holds `bytes` or fewer). Used to trim stale silence to a short
+    // pre-roll before the caption session reconnects (spec 004 §4.3).
+    void keep_last(size_t bytes);
 
 private:
     size_t capacity_;

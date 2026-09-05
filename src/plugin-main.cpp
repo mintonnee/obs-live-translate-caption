@@ -1,4 +1,5 @@
 #include "caption-session.hpp"
+#include "output-state.hpp"
 #include <obs-module.h>
 
 extern struct obs_source_info live_translate_filter_info;
@@ -16,11 +17,17 @@ bool obs_module_load(void)
 {
     blog(LOG_INFO, "[live-translate] module loaded");
     obs_register_source(&live_translate_filter_info);
+    // Hooks the frontend events and seeds the session with the current
+    // streaming/recording/virtualcam state (spec 004 §4.5).
+    lt::output_state_init();
     return true;
 }
 
 void obs_module_unload(void)
 {
+    // Unhook the frontend before stopping: an output stop/start event arriving
+    // mid-teardown would otherwise push state into a session we just stopped.
+    lt::output_state_shutdown();
     // The caption session's sinks call back into libobs (text source updates).
     // Stop it and drop the sinks now, while libobs is still alive; the
     // singleton's destructor runs at process exit, after libobs is gone.

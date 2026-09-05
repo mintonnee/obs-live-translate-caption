@@ -26,6 +26,15 @@ constexpr int kMaxCaptionWidth = 120;
 constexpr int kDefaultCaptionWidth = 60;
 constexpr double kMinCaptionHoldSeconds = 1.0;
 constexpr double kMaxCaptionHoldSeconds = 30.0;
+// Auto-pause (spec 004 §4.1). 0 s disables the idle pause entirely; the dBFS
+// threshold is user-facing because mic noise floors differ by an order of
+// magnitude between a quiet USB mic and a laptop's built-in one.
+constexpr int kMinIdleTimeoutSeconds = 0;
+constexpr int kMaxIdleTimeoutSeconds = 1800;
+constexpr int kDefaultIdleTimeoutSeconds = 300;
+constexpr double kMinIdleThresholdDbfs = -90.0;
+constexpr double kMaxIdleThresholdDbfs = -20.0;
+constexpr double kDefaultIdleThresholdDbfs = -45.0;
 // Translation models offered in the properties combo (the field stays editable).
 constexpr const char *kTranslateModelChoices[] = {
     "gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.5-flash",
@@ -45,6 +54,9 @@ struct FilterData {
     double caption_hold_seconds = 4.0;
     std::string caption_custom_vocabulary;
     std::string translate_model; // generateContent model id, "" = kTranslateModel
+    int idle_timeout_seconds = kDefaultIdleTimeoutSeconds;
+    double idle_threshold_dbfs = kDefaultIdleThresholdDbfs;
+    bool only_while_output_active = false;
     bool caption_active = false; // true iff this filter drives the caption session
 };
 
@@ -103,6 +115,9 @@ lt::CaptionConfig make_caption_config(const FilterData *d)
     cfg.max_lines = d->caption_max_lines;
     cfg.max_width = d->caption_max_width;
     cfg.hold_seconds = d->caption_hold_seconds;
+    cfg.idle_timeout_seconds = d->idle_timeout_seconds;
+    cfg.idle_threshold_dbfs = d->idle_threshold_dbfs;
+    cfg.only_while_output_active = d->only_while_output_active;
     return cfg;
 }
 
@@ -222,6 +237,16 @@ void filter_update(void *data, obs_data_t *settings)
         std::clamp(obs_data_get_double(settings, "caption_hold_seconds"),
                    kMinCaptionHoldSeconds, kMaxCaptionHoldSeconds);
     d->translate_model = obs_data_get_string(settings, "translate_model");
+    // Clamped here rather than trusted: SetSourceFilterSettings can carry any
+    // value, and the sliders' bounds only constrain the UI (criterion 12).
+    d->idle_timeout_seconds = static_cast<int>(std::clamp<long long>(
+        obs_data_get_int(settings, "idle_timeout_seconds"),
+        kMinIdleTimeoutSeconds, kMaxIdleTimeoutSeconds));
+    d->idle_threshold_dbfs =
+        std::clamp(obs_data_get_double(settings, "idle_threshold_dbfs"),
+                   kMinIdleThresholdDbfs, kMaxIdleThresholdDbfs);
+    d->only_while_output_active =
+        obs_data_get_bool(settings, "only_while_output_active");
     d->caption_custom_vocabulary =
         obs_data_get_string(settings, "caption_custom_vocabulary");
 
@@ -403,6 +428,19 @@ obs_properties_t *filter_properties(void *data)
     for (const char *id : kTranslateModelChoices)
         obs_property_list_add_string(model_list, id, id);
 
+    // Auto-pause (spec 004 §4.1). These apply live; they never reconnect.
+    obs_properties_add_int_slider(
+        props, "idle_timeout_seconds",
+        obs_module_text("Idle Timeout (seconds, 0 = never)"),
+        kMinIdleTimeoutSeconds, kMaxIdleTimeoutSeconds, 10);
+    obs_properties_add_float_slider(
+        props, "idle_threshold_dbfs", obs_module_text("Idle Threshold (dBFS)"),
+        kMinIdleThresholdDbfs, kMaxIdleThresholdDbfs, 1.0);
+    obs_properties_add_bool(
+        props, "only_while_output_active",
+        obs_module_text("Only run while streaming, recording or virtual camera "
+                        "is active"));
+
     obs_properties_add_text(props, "api_key", obs_module_text("Gemini API Key"),
                             OBS_TEXT_PASSWORD);
     obs_properties_add_text(
@@ -429,6 +467,13 @@ void filter_defaults(obs_data_t *settings)
     obs_data_set_default_double(settings, "caption_hold_seconds", 4.0);
     obs_data_set_default_string(settings, "caption_custom_vocabulary", "");
     obs_data_set_default_string(settings, "translate_model", lt::kTranslateModel);
+    // Absent from scene collections written before spec 004; the defaults keep
+    // those behaving as before except for the 5-minute idle pause (criterion 13).
+    obs_data_set_default_int(settings, "idle_timeout_seconds",
+                             kDefaultIdleTimeoutSeconds);
+    obs_data_set_default_double(settings, "idle_threshold_dbfs",
+                                kDefaultIdleThresholdDbfs);
+    obs_data_set_default_bool(settings, "only_while_output_active", false);
 }
 
 void filter_get_status(void *data, obs_data_t *settings)
