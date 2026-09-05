@@ -134,8 +134,11 @@ UI: `output_mode`는 콤보(`Translated speech` / `Translated captions`). 텍스
   - `contents`: 단일 `user` 턴. 본문에 직전 최대 3개 원문 세그먼트를 "Context:" 블록으로,
     현재 세그먼트를 "Translate:" 블록으로 넣는다(모델 턴을 마지막에 두지 않기 위한 결정).
   - `generationConfig`: `maxOutputTokens: 256`만. `thinkingConfig`와 샘플링 파라미터 없음(§3).
-  - 용어집: `caption_custom_vocabulary`의 항목을 system instruction 끝에 "Glossary of proper nouns and terms"로
-    나열하고 표기를 그대로 유지하도록 지시한다. STT 편향 어휘와 번역 표기를 일치시키기 위한 결정(2026-09-05 추가).
+  - 용어집: `caption_custom_vocabulary`의 항목을 system instruction **앞부분**에 "Glossary of proper nouns and terms"로
+    나열하고, 고유명사로 취급해 대상 언어의 외래어 표기(음차 또는 관례상 라틴 문자)로 쓰되 일반 단어로 번역하지
+    말라고 지시한다. 지시문은 "출력은 항상 대상 언어"로 끝난다. 처음에는 끝에 "표기를 그대로 유지"로 넣었는데,
+    한글 이름이 용어집에 있으면 한국어→일본어에서 문장 전체가 번역되지 않고 나오는 경우가 있어 순서와 문구를
+    바꿨다(2026-09-05).
 - 응답 파서 `parse_translate_response(json) -> optional<string>`: 성공 기준 6.
 - HTTP 워커: `ix::HttpClient`로 POST, 타임아웃 5 s, 동시 요청 최대 3개. 결과는 `seq`와 함께
   `CaptionComposer::on_translated(seq, text)` 또는 `on_failed(seq, reason)`으로 넘긴다.

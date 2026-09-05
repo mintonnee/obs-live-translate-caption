@@ -202,7 +202,9 @@ Consequences when you switch:
    Latin characters per line. **Caption Hold (seconds)** (1–30) sets how long
    the last line stays; **Custom Vocabulary** takes comma-separated names or
    terms to bias recognition and is also handed to the translator as a
-   glossary, so those names keep their spelling instead of being translated.
+   glossary of proper names: they are rendered the way the target language
+   writes foreign names (transliterated, or kept in Latin script where that
+   is the convention) instead of being translated into common words.
    **Translation Model** picks the generateContent model (default
    `gemini-3.1-flash-lite`; the list is editable, so any model id your account
    can use works — an unknown id shows up as `translate failed: HTTP 404` in
@@ -259,7 +261,7 @@ plugin support needed:
 | `caption_max_chars_per_line` | int | line width in display units (CJK = 2), clamped to 10-120 |
 | `caption_max_segments` | int | legacy (pre-002): read as the line count only when `caption_max_lines` has never been set |
 | `caption_hold_seconds` | number | seconds after the last sentence before the caption source is cleared, clamped to 1-30 |
-| `caption_custom_vocabulary` | string | comma-separated phrases passed to the transcriber as custom vocabulary and to the translator as a keep-as-is glossary |
+| `caption_custom_vocabulary` | string | comma-separated phrases passed to the transcriber as custom vocabulary and to the translator as a glossary of proper names (transliterated, never translated into common words) |
 | `translate_model` | string | generateContent model id used for translation (default `gemini-3.1-flash-lite`); any id the account can access, e.g. `gemini-3.5-flash-lite`, `gemini-flash-lite-latest`; applies from the next sentence |
 | `idle_timeout_seconds` | int | silence (below the threshold) before the STT stream is paused, clamped to 0-1800; `0` = never pause on silence. Setting it to `0` while paused resumes immediately |
 | `idle_threshold_dbfs` | number | chunk RMS level that counts as sound, clamped to -90 to -20 (0 dBFS = full-scale 16-bit RMS) |

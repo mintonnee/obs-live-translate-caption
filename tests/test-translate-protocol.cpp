@@ -60,8 +60,8 @@ TEST_CASE("system instruction handles input already in the target language")
     json j = json::parse(body);
     std::string instr = j["system_instruction"]["parts"][0]["text"].get<std::string>();
 
-    REQUIRE(instr.find("already") != std::string::npos);
-    REQUIRE(instr.find("cleaned up as-is") != std::string::npos);
+    REQUIRE(instr.find("already in German (de)") != std::string::npos);
+    REQUIRE(instr.find("as-is") != std::string::npos);
 }
 
 TEST_CASE("system instruction adds the length hint when max_chars is positive")
@@ -77,8 +77,7 @@ TEST_CASE("system instruction adds the length hint when max_chars is positive")
     std::string instr = j["system_instruction"]["parts"][0]["text"].get<std::string>();
 
     REQUIRE(instr.find("80 characters") != std::string::npos);
-    REQUIRE(instr.find("Keep the translation within about 80 characters when possible; "
-                        "prefer shorter wording over dropping meaning.") != std::string::npos);
+    REQUIRE(instr.find("Within about 80 characters if possible.") != std::string::npos);
     // Existing behaviour must still hold when max_chars is set.
     REQUIRE(instr.find("Japanese (ja)") != std::string::npos);
     REQUIRE(instr.find("no quotes") != std::string::npos);
@@ -339,10 +338,40 @@ TEST_CASE("glossary terms are listed in the system instruction")
     REQUIRE(instr.find("\"Gemini\"") != std::string::npos);
     REQUIRE(instr.find("\"OBS Studio\"") != std::string::npos);
     REQUIRE(instr.find("\"곽민규\"") != std::string::npos);
-    REQUIRE(instr.find("keep its spelling exactly as listed") != std::string::npos);
+    // Names are rendered as loanwords in the target language, not kept verbatim
+    // (a verbatim rule made the model leave whole sentences untranslated).
+    REQUIRE(instr.find("foreign name") != std::string::npos);
+    REQUIRE(instr.find("never translate them into common words") != std::string::npos);
+    REQUIRE(instr.find("spelling exactly as listed") == std::string::npos);
+    REQUIRE(instr.find("Translate everything else.") != std::string::npos);
+    // Glossary before the translate instruction, target-language reminder last.
+    REQUIRE(instr.find("Glossary") < instr.find("Translate the \"Translate:\" text"));
+    REQUIRE(instr.rfind("Always answer in Korean (ko).") != std::string::npos);
+    REQUIRE(instr.rfind("Korean (ko)") > instr.rfind("Glossary"));
     // The glossary belongs to the instruction, not to the text being translated.
     std::string user = j["contents"][0]["parts"][0]["text"].get<std::string>();
     REQUIRE(user.find("Gemini") == std::string::npos);
+}
+
+TEST_CASE("system instruction ends with the target-language reminder even without a glossary")
+{
+    TranslateRequest req;
+    req.target_code = "ja";
+    req.target_name = "Japanese";
+    req.text = "hello";
+    req.max_chars = 80;
+
+    std::string body = build_translate_request(req);
+    json j = json::parse(body);
+    std::string instr = j["system_instruction"]["parts"][0]["text"].get<std::string>();
+
+    const std::string tail = "Always answer in Japanese (ja).";
+    REQUIRE(instr.size() >= tail.size());
+    REQUIRE(instr.compare(instr.size() - tail.size(), tail.size(), tail) == 0);
+    // The length hint stays before the reminder.
+    REQUIRE(instr.find("80 characters") < instr.find("Always answer in"));
+    // Latency budget: the whole instruction stays compact.
+    REQUIRE(instr.size() < 450);
 }
 
 TEST_CASE("no glossary sentence without terms")

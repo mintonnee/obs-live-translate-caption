@@ -7,29 +7,24 @@ namespace lt {
 
 namespace {
 
+// Kept short: every token here is paid and read on every sentence, and a
+// longer instruction measurably raised Flash-Lite latency. Order still
+// matters for a minimal-thinking model: the glossary comes first, framed as
+// "names to write as loanwords", and the instruction ends with the target
+// language so the last thing the model reads is "answer in <target>". A
+// verbatim-spelling rule at the end made it return whole Korean sentences
+// untranslated when the glossary held Korean names.
 std::string build_system_instruction(const TranslateRequest &req)
 {
+    const std::string target = req.target_name + " (" + req.target_code + ")";
     std::string s;
-    s += "You are a live-subtitle translator. Translate the source text into ";
-    s += req.target_name;
-    s += " (";
-    s += req.target_code;
-    s += "). Output only the translation: no quotes, no explanations, "
-         "and do not echo the source text. If the input is already written in the "
-         "target language, return it cleaned up as-is (fix casing/punctuation only, "
-         "do not translate it again). Keep the translation short and readable, in "
-         "the concise style of an on-screen subtitle. Only translate the text in "
-         "the \"Translate:\" block below; any \"Context:\" block is prior dialogue "
-         "provided for reference only and must not be translated or echoed.";
-    if (req.max_chars > 0) {
-        s += " Keep the translation within about ";
-        s += std::to_string(req.max_chars);
-        s += " characters when possible; prefer shorter wording over dropping meaning.";
-    }
+    s += "Live-subtitle translator into ";
+    s += target;
+    s += ".";
     if (!req.glossary.empty()) {
         // Same list the transcriber was biased toward, so STT and translation
-        // agree on how these names are written.
-        s += " Glossary of proper nouns and terms: ";
+        // agree on which words are names.
+        s += " Glossary (proper names): ";
         bool first = true;
         for (const auto &term : req.glossary) {
             if (term.empty()) continue;
@@ -39,9 +34,26 @@ std::string build_system_instruction(const TranslateRequest &req)
             s += "\"";
             first = false;
         }
-        s += ". When one of them appears in the source, keep its spelling exactly "
-             "as listed; never translate it into a common word or rephrase it.";
+        s += ". Write them as a ";
+        s += target;
+        s += " speaker writes a foreign name (transliterated, or Latin spelling "
+             "if usual); never translate them into common words. Translate "
+             "everything else.";
     }
+    s += " Translate the \"Translate:\" text; \"Context:\" is earlier dialogue, "
+         "reference only. Output only the translation: no quotes, no "
+         "explanations, do not echo the source. Short, subtitle style. Only if "
+         "the whole input is already in ";
+    s += target;
+    s += ", return it as-is with punctuation fixed.";
+    if (req.max_chars > 0) {
+        s += " Within about ";
+        s += std::to_string(req.max_chars);
+        s += " characters if possible.";
+    }
+    s += " Always answer in ";
+    s += target;
+    s += ".";
     return s;
 }
 

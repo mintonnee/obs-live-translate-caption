@@ -164,8 +164,9 @@ mic ─▶ [Gemini Translate Caption filter]
    기본 60, 한중일 문자는 2로 계산)가 플러그인이 줄바꿈할 텍스트 박스를 정합니다. 기본값은
    1920×1080 장면에 폰트 크기 48 기준으로 한 줄에 한글 약 30자, 라틴 문자 약 60자입니다.
    **자막 유지 시간 (초)**(1–30)는 마지막 줄이 남아 있는 시간입니다. **사용자 사전**에는 쉼표로
-   구분한 이름이나 용어를 넣으면 인식이 그쪽으로 기울고, 번역기에도 용어집으로 전달되어 번역되지
-   않고 철자가 유지됩니다. **번역 모델**은 generateContent 모델을 고릅니다(기본
+   구분한 이름이나 용어를 넣으면 인식이 그쪽으로 기울고, 번역기에도 고유명사 용어집으로 전달되어
+   일반 단어로 의역되지 않고 대상 언어의 외래어 표기(음차, 또는 관례상 라틴 문자 그대로)로
+   나옵니다. **번역 모델**은 generateContent 모델을 고릅니다(기본
    `gemini-3.1-flash-lite`, 목록은 편집 가능하므로 계정에서 쓸 수 있는 모델 id는 무엇이든 됩니다.
    모르는 id는 로그에 `translate failed: HTTP 404`로 나타납니다). Lite가 아닌 모델은 기본적으로
    더 오래 생각하므로 지연이 늘어납니다. 텍스트 소스 자체에서는 *자동 줄바꿈*과 *사용자 지정 텍스트
@@ -212,7 +213,7 @@ mic ─▶ [Gemini Translate Caption filter]
 | `caption_max_chars_per_line` | int | 줄 폭(표시 단위, 한중일 = 2), 10–120으로 제한 |
 | `caption_max_segments` | int | 레거시(002 이전). `caption_max_lines`가 한 번도 설정되지 않았을 때만 줄 수로 읽습니다 |
 | `caption_hold_seconds` | number | 마지막 문장 뒤 자막 소스를 비우기까지의 초, 1–30으로 제한 |
-| `caption_custom_vocabulary` | string | 쉼표로 구분한 구문. 인식기에는 사용자 사전으로, 번역기에는 그대로 두는 용어집으로 전달 |
+| `caption_custom_vocabulary` | string | 쉼표로 구분한 구문. 인식기에는 사용자 사전으로, 번역기에는 고유명사 용어집(음차하되 일반 단어로 번역하지 않음)으로 전달 |
 | `translate_model` | string | 번역에 쓰는 generateContent 모델 id(기본 `gemini-3.1-flash-lite`). 계정에서 쓸 수 있는 id는 무엇이든 가능(예: `gemini-3.5-flash-lite`, `gemini-flash-lite-latest`). 다음 문장부터 적용 |
 | `idle_timeout_seconds` | int | STT 스트림을 일시정지하기까지의 무음(임계값 미만) 시간, 0–1800으로 제한. `0`은 무음으로 끊지 않음. 일시정지 중에 `0`으로 바꾸면 즉시 재개 |
 | `idle_threshold_dbfs` | number | 소리로 인정하는 청크 RMS 레벨, -90–-20으로 제한(0 dBFS = 16비트 풀스케일 RMS) |
