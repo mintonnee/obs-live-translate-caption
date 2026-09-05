@@ -1,5 +1,7 @@
 # Gemini Translate Caption for OBS
 
+**English** | [한국어](README.ko.md)
+
 [![Latest release](https://img.shields.io/github/v/release/plan12be/obs-live-translate-caption?sort=semver)](https://github.com/plan12be/obs-live-translate-caption/releases)
 [![Release build](https://github.com/plan12be/obs-live-translate-caption/actions/workflows/release.yaml/badge.svg)](https://github.com/plan12be/obs-live-translate-caption/actions/workflows/release.yaml)
 [![License: GPL v2](https://img.shields.io/badge/license-GPLv2-blue.svg)](LICENSE)
@@ -266,7 +268,8 @@ plugin support needed:
 Notes:
 
 - `sourceName` / `filterName` must match your OBS names exactly (`filterName`
-  defaults to *Gemini Translate Caption*).
+  defaults to *Gemini Translate Caption*; the name is deliberately not
+  translated, so it is the same in a Korean-language OBS).
 - Keep the request's default `overlay: true` (merge). With `overlay: false` OBS
   first resets the filter to defaults — and since `api_key` has no default, that
   **clears the key and stops translation**.
@@ -315,7 +318,13 @@ show function names in the OBS log) into the plugin directory:
 ```powershell
 Copy-Item build_x64\RelWithDebInfo\obs-live-translate-caption.dll "C:\Program Files\obs-studio\obs-plugins\64bit\"
 Copy-Item build_x64\RelWithDebInfo\obs-live-translate-caption.pdb "C:\Program Files\obs-studio\obs-plugins\64bit\"
+Copy-Item -Recurse -Force data\locale "C:\Program Files\obs-studio\data\obs-plugins\obs-live-translate-caption\"
 ```
+
+The third line installs the UI strings (`data/locale/en-US.ini`, `ko-KR.ini`);
+without it the filter still works but shows the raw string keys as labels.
+OBS picks the file matching its *Settings → General → Language*, falling back
+to English.
 
 **macOS** (Xcode 16+, universal) — produces `build_macos/RelWithDebInfo/obs-live-translate-caption.plugin`:
 
@@ -379,6 +388,7 @@ src/
   backoff.*              exponential reconnect backoff
   base64.*, languages.hpp
 tests/                   Catch2 unit tests (one per pure module)
+data/locale/             UI strings (en-US, ko-KR); installed next to the plugin
 installer/               Inno Setup script for the Windows installer
 cmake/, CMakePresets.json, buildspec.json
 ```
@@ -439,23 +449,6 @@ create or style sources, write caption files (SRT/TXT), or embed CEA-608
 captions into the stream output — see the non-goals tables in
 [`docs/specs/001-caption-translation-pipeline.md`](docs/specs/001-caption-translation-pipeline.md)
 and [`docs/specs/003-remove-speech-mode.md`](docs/specs/003-remove-speech-mode.md).
-
-## Contributing
-
-- **Test-driven.** Write the failing Catch2 test first, then the minimal
-  implementation. Pure logic belongs behind the libobs-free `unit-tests`
-  target; changes that touch libobs (`filter.cpp`, `caption-output.cpp`,
-  `caption-session.cpp`) are verified by a full plugin build and by the manual
-  checks in the spec's §5.
-- **Do not skip verification.** If a build or test cannot run because a
-  prerequisite (libobs, a Windows toolchain) is missing, say so instead of
-  claiming the change works.
-- **Branches and commits.** Work on a feature branch and keep commits scoped to
-  one change; do not add AI co-author trailers.
-- **Specs.** Larger features start as a spec under `docs/specs/` (index and
-  template in [`docs/specs/README.md`](docs/specs/README.md)); the captions
-  pipeline is `001-caption-translation-pipeline.md`. Keep the non-goals above in
-  mind when scoping a change.
 
 ## License
 

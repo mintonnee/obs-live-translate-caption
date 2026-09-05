@@ -62,7 +62,7 @@ struct FilterData {
 
 const char *filter_get_name(void *)
 {
-    return obs_module_text("Gemini Translate Caption");
+    return obs_module_text("FilterName");
 }
 
 // English name for the translation prompt: the display names in languages.hpp
@@ -370,13 +370,12 @@ bool add_text_source_cb(void *param, obs_source_t *source)
 std::string filter_status_text(FilterData *d)
 {
     if (d && !is_primary_filter(d))
-        return obs_module_text("Another Gemini Translate Caption filter on this "
-                               "source is already active; this one is disabled.");
+        return obs_module_text("Status.DuplicateFilter");
     std::string missing = lt::caption_output_missing_source();
     if (!missing.empty())
         return "Caption text source \"" + missing + "\" not found";
     if (d && d->caption_text_source.empty())
-        return obs_module_text("Set a caption text source to show captions");
+        return obs_module_text("Status.NoCaptionSource");
     return lt::CaptionSession::instance().status_text();
 }
 
@@ -385,7 +384,7 @@ obs_properties_t *filter_properties(void *data)
     obs_properties_t *props = obs_properties_create();
 
     obs_property_t *list = obs_properties_add_list(
-        props, "target_lang", obs_module_text("Target Language"),
+        props, "target_lang", obs_module_text("TargetLanguage"),
         OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
     for (int i = 0; i < lt::kLanguagesCount; ++i)
         obs_property_list_add_string(list, lt::kLanguages[i].name,
@@ -395,35 +394,35 @@ obs_properties_t *filter_properties(void *data)
     // typed in before the source is created (spec §4.1).
     TextSourceLists lists = {};
     lists.caption = obs_properties_add_list(
-        props, "caption_text_source", obs_module_text("Caption Text Source"),
+        props, "caption_text_source", obs_module_text("CaptionTextSource"),
         OBS_COMBO_TYPE_EDITABLE, OBS_COMBO_FORMAT_STRING);
     lists.source = obs_properties_add_list(
         props, "caption_source_text_source",
-        obs_module_text("Source Transcript Text Source (optional)"),
+        obs_module_text("SourceTranscriptTextSource"),
         OBS_COMBO_TYPE_EDITABLE, OBS_COMBO_FORMAT_STRING);
-    obs_property_list_add_string(lists.caption, obs_module_text("(none)"), "");
-    obs_property_list_add_string(lists.source, obs_module_text("(none)"), "");
+    obs_property_list_add_string(lists.caption, obs_module_text("None"), "");
+    obs_property_list_add_string(lists.source, obs_module_text("None"), "");
     obs_enum_sources(add_text_source_cb, &lists);
 
     obs_properties_add_int_slider(
-        props, "caption_max_lines", obs_module_text("Caption Lines"),
+        props, "caption_max_lines", obs_module_text("CaptionLines"),
         kMinCaptionLines, kMaxCaptionLines, 1);
     obs_properties_add_int_slider(
         props, "caption_max_chars_per_line",
-        obs_module_text("Max Characters per Line (CJK count as 2)"),
+        obs_module_text("MaxCharsPerLine"),
         kMinCaptionWidth, kMaxCaptionWidth, 1);
     obs_properties_add_float_slider(
         props, "caption_hold_seconds",
-        obs_module_text("Caption Hold (seconds)"), kMinCaptionHoldSeconds,
+        obs_module_text("CaptionHoldSeconds"), kMinCaptionHoldSeconds,
         kMaxCaptionHoldSeconds, 0.5);
     obs_properties_add_text(
         props, "caption_custom_vocabulary",
-        obs_module_text("Custom Vocabulary (comma-separated)"), OBS_TEXT_DEFAULT);
+        obs_module_text("CustomVocabulary"), OBS_TEXT_DEFAULT);
 
     // Editable so a model id that is not listed yet can be typed in. Ids come
     // from the Gemini model docs; availability depends on the account.
     obs_property_t *model_list = obs_properties_add_list(
-        props, "translate_model", obs_module_text("Translation Model"),
+        props, "translate_model", obs_module_text("TranslationModel"),
         OBS_COMBO_TYPE_EDITABLE, OBS_COMBO_FORMAT_STRING);
     for (const char *id : kTranslateModelChoices)
         obs_property_list_add_string(model_list, id, id);
@@ -431,22 +430,20 @@ obs_properties_t *filter_properties(void *data)
     // Auto-pause (spec 004 §4.1). These apply live; they never reconnect.
     obs_properties_add_int_slider(
         props, "idle_timeout_seconds",
-        obs_module_text("Idle Timeout (seconds, 0 = never)"),
+        obs_module_text("IdleTimeout"),
         kMinIdleTimeoutSeconds, kMaxIdleTimeoutSeconds, 10);
     obs_properties_add_float_slider(
-        props, "idle_threshold_dbfs", obs_module_text("Idle Threshold (dBFS)"),
+        props, "idle_threshold_dbfs", obs_module_text("IdleThreshold"),
         kMinIdleThresholdDbfs, kMaxIdleThresholdDbfs, 1.0);
     obs_properties_add_bool(
         props, "only_while_output_active",
-        obs_module_text("Only run while streaming, recording or virtual camera "
-                        "is active"));
+        obs_module_text("OnlyWhileOutputActive"));
 
-    obs_properties_add_text(props, "api_key", obs_module_text("Gemini API Key"),
+    obs_properties_add_text(props, "api_key", obs_module_text("ApiKey"),
                             OBS_TEXT_PASSWORD);
     obs_properties_add_text(
         props, "warn",
-        obs_module_text("Note: the API key is stored in plaintext in your "
-                        "scene collection file. Do not share that file."),
+        obs_module_text("ApiKeyWarning"),
         OBS_TEXT_INFO);
     auto *d = static_cast<FilterData *>(data);
     std::string status = filter_status_text(d);

@@ -34,9 +34,9 @@ RestartApplications=no
 [Files]
 Source: "..\build_x64\RelWithDebInfo\obs-live-translate-caption.dll"; \
   DestDir: "{app}\obs-plugins\64bit"; Flags: ignoreversion
-; If the plugin ever ships a data/ tree (locale, etc.), add it here:
-; Source: "..\data\*"; DestDir: "{app}\data\obs-plugins\obs-live-translate-caption"; \
-;   Flags: recursesubdirs ignoreversion
+; Locale files (data/locale/*.ini); OBS looks them up under data/obs-plugins/<module>.
+Source: "..\data\*"; DestDir: "{app}\data\obs-plugins\obs-live-translate-caption"; \
+  Flags: recursesubdirs ignoreversion
 
 [InstallDelete]
 ; The original speech-only plugin (obs-live-translate) uses different source ids,
