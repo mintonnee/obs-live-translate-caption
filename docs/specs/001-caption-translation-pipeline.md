@@ -116,7 +116,8 @@ UI: `output_mode`는 콤보(`Translated speech` / `Translated captions`). 텍스
 
 - 연결: `ws.setUrl(BidiGenerateContent?key=…)` → open 시 `build_caption_setup_message(...)` 전송.
 - 입력: 필터에서 받은 청크를 `realtimeInput.audio`(기존 `build_realtime_input_message` 재사용)로
-  연속 전송한다. 침묵도 보낸다(기존 결정, `filter.cpp` 주석).
+  연속 전송한다. 침묵도 보낸다(기존 결정, `filter.cpp` 주석). 긴 유휴·출력 꺼짐 시 세션을
+  일시정지하는 조건은 `004-idle-pause-and-output-gating.md`가 다룬다.
 - 수신: `parse_caption_server_message`가 `Interim{text}` / `Final{text}` / `Error` / `Other`를
   돌려준다. Final은 단조 증가 `seq`를 부여해 번역 큐에 넣고, Interim은 원문 소스 표시로만 쓴다.
 - 재연결: close/error 시 `Backoff(1000, 30000)`으로 재시도(기존 `backoff.hpp`). 연결 시각 기준
