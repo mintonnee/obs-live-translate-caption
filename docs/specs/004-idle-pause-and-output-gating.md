@@ -94,7 +94,7 @@ UI(**Translation Model** 아래, **Gemini API Key** 위):
 
 - **Idle Timeout (seconds, 0 = never)** int 슬라이더 0–1800, step 10.
 - **Idle Threshold (dBFS)** float 슬라이더 -90–-20, step 1.
-- **Only run while streaming, recording or virtual camera is active** 체크박스.
+- **Only run while streaming, recording or virtual camera** 체크박스.
 
 `filter_defaults`가 세 키의 기본값을 등록하고, `filter_update`가 clamp 후 `CaptionConfig`에 넣어
 `configure()`로 넘긴다. 세 키는 재연결 없이 적용된다(`configure()`의 `reconnect` 판정에 포함하지

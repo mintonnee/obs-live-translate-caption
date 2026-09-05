@@ -18,52 +18,7 @@
 참고). 원 프로젝트의 히스토리와 GPLv2 라이선스는 그대로 유지합니다.
 
 > 이 플러그인은 AI(Claude)의 도움을 많이 받아 만들었습니다. OBS Project나 Google과 무관한
-> 독립 프로젝트입니다. 버그 리포트와 기여를 환영합니다.
-
-## 동작 방식
-
-플러그인은 OBS 소스 하나를 등록합니다. **Gemini Translate Caption** *오디오 필터*입니다. 이 필터를
-마이크 소스에 추가하세요. 필터는 마이크 소리를 16 kHz 모노 16비트 PCM으로 리샘플링하고 100 ms
-(3200바이트) 청크로 잘라, TLS WebSocket으로 `gemini-3.5-transcribe-live`(Live API 음성 인식,
-SMART 모드)에 **끊김 없이** 보냅니다. 무음도 함께 보내는데, 모델이 문장 끝을 판단하는 데 쓰기
-때문입니다. 확정된 문장은 선택한 Flash-Lite 모델(generateContent, 직전 세 문장을 문맥으로 전달)이
-번역해 지정한 OBS **텍스트 소스**에 씁니다. 그래서 자막은 그 소스에 설정한 폰트, 외곽선, 위치를
-그대로 따릅니다. 선택 사항으로 두 번째 텍스트 소스에 원문 인식 결과를 실시간으로 보여 줄 수 있습니다
-(말하는 동안은 중간 결과, 문장이 끝나면 확정 문장으로 교체).
-
-무음을 계속 보내도 비용이 나가므로 세션은 **스스로 일시정지**합니다. 새 세션은 소리가 들릴 때까지
-아예 연결하지 않고(*Paused (waiting for sound)*), 연결된 뒤에도 마이크가 유휴 임계값 아래에
-**유휴 타임아웃**(기본 5분) 동안 머물면 WebSocket을 다시 닫습니다(*Paused (idle)*). 일시정지
-중에도 오디오는 계속 버퍼에 쌓이고, 임계값을 넘는 첫 청크가 들어오면 연결하며(약 1–2초) 그 직전
-1초도 함께 보내므로 첫 단어가 잘리지 않습니다. 키가 제대로 동작하는지 보려면 한마디 하고 상태가
-*Connected*로 바뀌는지 확인하면 됩니다. 필요하면 **방송·녹화·가상 카메라가 켜져 있을 때만** 실행하게
-할 수도 있습니다(그 외에는 *Paused (output inactive)*). 번역 요청은 확정된 문장에만 보내므로,
-일시정지 중이거나 조용할 때는 번역 쪽 비용도 없습니다.
-[`docs/specs/004-idle-pause-and-output-gating.md`](docs/specs/004-idle-pause-and-output-gating.md)를
-참고하세요.
-
-```
-mic ─▶ [Gemini Translate Caption filter]
-          resample 16 kHz mono → chunk → WebSocket ─▶ gemini-3.5-transcribe-live
-                                                          │ interim / final text
-                                                          ▼
-       [Source Transcript text source] ◀── (optional) ◀──┤
-                                                          │ final sentence
-                                                          ▼
-                                       generateContent ─▶ gemini-3.1-flash-lite
-                                                          │ translation
-                                                          ▼
-       [Caption text source] ◀── CaptionComposer (in-order, N lines, hold timer)
-```
-
-모델이 순서를 바꿔 응답해도 번역은 말한 순서대로 표시됩니다. 번역에 실패한 문장은 로그만 남기고
-건너뛰며 다음 문장을 막지 않습니다. 플러그인은 모든 문장을 **한 줄 최대 글자 수**(표시 단위, 한중일
-문자는 2로 계산하므로 한국어·일본어·중국어 줄에는 라틴 문자의 절반이 들어갑니다)에 맞춰 직접
-줄바꿈하고, 최신 **자막 줄 수**만큼만 화면에 남기며, 다 들어가지 않는 문장은 `…`로 자르고, 마지막
-문장 뒤 **자막 유지 시간**이 지나면 소스를 비웁니다. 그래서 텍스트 소스의 박스가 처음 잡아 둔 크기를
-넘지 않습니다. 원문 소스도 같은 방식으로 줄바꿈하되 *마지막* 줄들을 남겨 말하는 동안 최신 단어가
-보이게 합니다. 하나의 공유 `CaptionSession`이 WebSocket(backoff 재연결, Live API 10분 제한 전
-선제 재연결)과 번역 워커 세 개를 관리합니다.
+> 독립 프로젝트입니다.
 
 ## Gemini API 키 받기
 
@@ -111,7 +66,8 @@ mic ─▶ [Gemini Translate Caption filter]
 - ⚠️ 자막은 문장을 마친 뒤 잠시 후 나타납니다. 인식기가 말이 멈춘 뒤 문장을 확정하고, 이어서 번역
   왕복(보통 1.5초 이내)이 따라옵니다.
 - ❌ 원 프로젝트의 음성→음성 출력(*Gemini Translated Audio* 소스, 에코·재생 지연 옵션)은
-  제거했습니다. *설치* 아래 *음성 번역 플러그인에서 옮겨오기*를 참고하세요.
+  제거했습니다. 이 플러그인은 필터 id와 이름이 달라 원 플러그인과 충돌하지 않으며, 원 플러그인으로
+  만든 필터는 다시 추가해야 합니다.
 
 ## 설치 (빌드된 패키지)
 
@@ -133,20 +89,6 @@ mic ─▶ [Gemini Translate Caption filter]
 > macOS와 Linux 패키지는 CI가 만들지만 **해당 플랫폼에서 아직 검증하지 않았습니다**. 피드백을
 > 환영합니다. 테스트한 플랫폼은 Windows입니다.
 
-### 음성 번역 플러그인에서 옮겨오기
-
-이 플러그인은 원래의 `obs-live-translate`와 일부러 분리되어 있습니다. 필터의 소스 id
-(`gemini_translate_caption_filter`)와 이름(*Gemini Translate Caption*)이 달라 둘이 섞이지
-않습니다. 옮겨올 때 알아 둘 점:
-
-- 원 플러그인이 만든 필터(*Gemini Live Translate*)는 이 플러그인이 인식하지 않습니다. 마이크에서
-  제거하고 **Gemini Translate Caption** 필터를 새로 추가하세요. API 키와 설정은 다시 입력해야
-  합니다.
-- 남아 있는 *Gemini Translated Audio* 소스는 누락된 소스로 표시되며 그냥 지우면 됩니다. 음성 출력은
-  더 이상 없습니다.
-- Windows 인스톨러는 설치된 `obs-live-translate.dll`을 제거해 옛 필터가 *필터* 목록에 남지 않게
-  합니다. 수동으로 설치했다면 두 플러그인을 함께 쓸 생각이 아닌 한 OBS를 닫고 직접 지우세요.
-
 ## 사용법
 
 1. 장면에 *텍스트(GDI+)* 소스(macOS·Linux: *텍스트(FreeType 2)*)를 추가하고 원하는 대로
@@ -154,10 +96,9 @@ mic ─▶ [Gemini Translate Caption filter]
 
 2. 마이크 소스에 **Gemini Translate Caption** 필터를 추가합니다(마이크 우클릭 → *필터* → **+** →
    *Gemini Translate Caption*). API 키를 붙여 넣고 번역 언어를 고릅니다. 상태는 말을 하기 전까지
-   *Paused (waiting for sound)*이고, 말을 하면 *Connected*로 바뀝니다. (아래 스크린샷은 자막
-   설정이 추가되기 전 것입니다.)
+   *Paused (waiting for sound)*이고, 말을 하면 *Connected*로 바뀝니다.
 
-   ![Gemini Translate Caption filter properties](screenshots/micro-filters.png)
+   ![Gemini Translate Caption filter properties](screenshots/filter-config-ko.png)
 
 3. 필터에서 **자막 텍스트 소스**에 텍스트 소스를 고르고, 인식된 원문을 보여 주려면 **원문 텍스트
    소스**에 두 번째 소스를 고릅니다. **자막 줄 수**(1–6, 기본 2)와 **한 줄 최대 글자 수**(10–120,
@@ -231,6 +172,51 @@ mic ─▶ [Gemini Translate Caption filter]
   무시됩니다.
 - **쓰기 전용**입니다. 실행 중 연결 상태(Connecting / Connected / Paused / API 키 오류)는 WebSocket으로
   노출되지 않습니다. `GetSourceFilterSettings`는 저장된 설정을 돌려주지 실시간 상태를 주지 않습니다.
+
+## 동작 방식
+
+플러그인은 OBS 소스 하나를 등록합니다. **Gemini Translate Caption** *오디오 필터*입니다. 이 필터를
+마이크 소스에 추가하세요. 필터는 마이크 소리를 16 kHz 모노 16비트 PCM으로 리샘플링하고 100 ms
+(3200바이트) 청크로 잘라, TLS WebSocket으로 `gemini-3.5-transcribe-live`(Live API 음성 인식,
+SMART 모드)에 **끊김 없이** 보냅니다. 무음도 함께 보내는데, 모델이 문장 끝을 판단하는 데 쓰기
+때문입니다. 확정된 문장은 선택한 Flash-Lite 모델(generateContent, 직전 세 문장을 문맥으로 전달)이
+번역해 지정한 OBS **텍스트 소스**에 씁니다. 그래서 자막은 그 소스에 설정한 폰트, 외곽선, 위치를
+그대로 따릅니다. 선택 사항으로 두 번째 텍스트 소스에 원문 인식 결과를 실시간으로 보여 줄 수 있습니다
+(말하는 동안은 중간 결과, 문장이 끝나면 확정 문장으로 교체).
+
+무음을 계속 보내도 비용이 나가므로 세션은 **스스로 일시정지**합니다. 새 세션은 소리가 들릴 때까지
+아예 연결하지 않고(*Paused (waiting for sound)*), 연결된 뒤에도 마이크가 유휴 임계값 아래에
+**유휴 타임아웃**(기본 5분) 동안 머물면 WebSocket을 다시 닫습니다(*Paused (idle)*). 일시정지
+중에도 오디오는 계속 버퍼에 쌓이고, 임계값을 넘는 첫 청크가 들어오면 연결하며(약 1–2초) 그 직전
+1초도 함께 보내므로 첫 단어가 잘리지 않습니다. 키가 제대로 동작하는지 보려면 한마디 하고 상태가
+*Connected*로 바뀌는지 확인하면 됩니다. 필요하면 **방송·녹화·가상 카메라가 켜져 있을 때만** 실행하게
+할 수도 있습니다(그 외에는 *Paused (output inactive)*). 번역 요청은 확정된 문장에만 보내므로,
+일시정지 중이거나 조용할 때는 번역 쪽 비용도 없습니다.
+[`docs/specs/004-idle-pause-and-output-gating.md`](docs/specs/004-idle-pause-and-output-gating.md)를
+참고하세요.
+
+```
+mic ─▶ [Gemini Translate Caption filter]
+          resample 16 kHz mono → chunk → WebSocket ─▶ gemini-3.5-transcribe-live
+                                                          │ interim / final text
+                                                          ▼
+       [Source Transcript text source] ◀── (optional) ◀──┤
+                                                          │ final sentence
+                                                          ▼
+                                       generateContent ─▶ gemini-3.1-flash-lite
+                                                          │ translation
+                                                          ▼
+       [Caption text source] ◀── CaptionComposer (in-order, N lines, hold timer)
+```
+
+모델이 순서를 바꿔 응답해도 번역은 말한 순서대로 표시됩니다. 번역에 실패한 문장은 로그만 남기고
+건너뛰며 다음 문장을 막지 않습니다. 플러그인은 모든 문장을 **한 줄 최대 글자 수**(표시 단위, 한중일
+문자는 2로 계산하므로 한국어·일본어·중국어 줄에는 라틴 문자의 절반이 들어갑니다)에 맞춰 직접
+줄바꿈하고, 최신 **자막 줄 수**만큼만 화면에 남기며, 다 들어가지 않는 문장은 `…`로 자르고, 마지막
+문장 뒤 **자막 유지 시간**이 지나면 소스를 비웁니다. 그래서 텍스트 소스의 박스가 처음 잡아 둔 크기를
+넘지 않습니다. 원문 소스도 같은 방식으로 줄바꿈하되 *마지막* 줄들을 남겨 말하는 동안 최신 단어가
+보이게 합니다. 하나의 공유 `CaptionSession`이 WebSocket(backoff 재연결, Live API 10분 제한 전
+선제 재연결)과 번역 워커 세 개를 관리합니다.
 
 ## 소스에서 빌드
 

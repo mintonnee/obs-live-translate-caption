@@ -22,61 +22,7 @@ The original project's history and GPLv2 license are kept.
 
 > This plugin was built with significant assistance from AI (Claude). It is an
 > independent project and is not affiliated with or endorsed by the OBS Project
-> or Google. Bug reports and contributions are welcome.
-
-## How it works
-
-The plugin registers one OBS source: the **Gemini Translate Caption** *audio
-filter*. Add it to your microphone source. It resamples the mic to 16 kHz mono
-16-bit PCM, chunks it (100 ms / 3200-byte chunks) and streams it
-**continuously** — silence included, which the model uses to detect the end of
-an utterance — to `gemini-3.5-transcribe-live` (Live API speech-to-text, SMART
-mode) over a TLS WebSocket. Every finalized sentence is translated with the
-selected Flash-Lite model (generateContent, the previous three sentences as
-context) and written into an OBS **text source** you pick — so the subtitles
-use whatever font, outline and position you set on that source. A second,
-optional text source can show the source-language transcript live (interim
-text while you speak, replaced by the final sentence).
-
-Streaming silence still costs money, so the session **pauses itself**. A
-fresh session does not connect at all until it hears something (*Paused
-(waiting for sound)*), and once connected, a mic that stays below the idle
-threshold for **Idle Timeout** (default 5 minutes) closes the WebSocket again
-(*Paused (idle)*). Audio keeps being buffered while paused; the first chunk
-above the threshold connects (about 1–2 s), and the last second before it is
-sent along, so the first words are not lost. To check that a key works, just
-say a word and watch the status turn *Connected*. Optionally the filter can also run **only while
-streaming, recording or the virtual camera is active** (*Paused (output
-inactive)* otherwise). Translation requests are only made for finalized
-sentences, so a paused or silent session costs nothing on that side. See
-[`docs/specs/004-idle-pause-and-output-gating.md`](docs/specs/004-idle-pause-and-output-gating.md).
-
-```
-mic ─▶ [Gemini Translate Caption filter]
-          resample 16 kHz mono → chunk → WebSocket ─▶ gemini-3.5-transcribe-live
-                                                          │ interim / final text
-                                                          ▼
-       [Source Transcript text source] ◀── (optional) ◀──┤
-                                                          │ final sentence
-                                                          ▼
-                                       generateContent ─▶ gemini-3.1-flash-lite
-                                                          │ translation
-                                                          ▼
-       [Caption text source] ◀── CaptionComposer (in-order, N lines, hold timer)
-```
-
-Translations are shown in the order the sentences were spoken even when the
-model answers out of order; a sentence whose translation fails is skipped
-(logged) without blocking the next one. The plugin wraps every sentence itself
-to **Max Characters per Line** display units (CJK characters count as 2, so
-Korean/Japanese/Chinese lines hold half as many glyphs as Latin ones), keeps
-only the newest **Caption Lines** lines on screen, cuts a sentence that would
-not fit with `…`, and clears the source **Caption Hold** seconds after the last
-sentence — so the text source's box never grows past what you sized it for.
-The source transcript is wrapped the same way but keeps its *last* lines, so
-the newest words stay visible while you speak. A single shared `CaptionSession`
-owns the WebSocket (reconnect with backoff, proactive reconnect before the Live
-API's 10-minute cap) and three translation workers.
+> or Google.
 
 ## Getting a Gemini API key
 
@@ -138,8 +84,9 @@ Windows is the tested platform; see the note under *Install*. Current behavior:
   finalizes on a pause, then the translation round-trip (typically under
   1.5 s) follows.
 - ❌ The speech-to-speech output of the original project (the *Gemini
-  Translated Audio* source, echo and playback-delay options) was removed; see
-  *Upgrading from the speech-to-speech plugin* under *Install*.
+  Translated Audio* source, echo and playback-delay options) was removed. This
+  plugin uses its own filter id and name, so it does not conflict with the
+  original one; filters made by the original plugin have to be re-added.
 
 ## Install (prebuilt)
 
@@ -162,23 +109,6 @@ closed**:
 > The macOS and Linux packages are produced by CI but **not yet verified on those
 > platforms** — feedback is welcome. Windows is the tested platform.
 
-### Upgrading from the speech-to-speech plugin
-
-This plugin is deliberately separate from the original `obs-live-translate`:
-its filter has a different source id (`gemini_translate_caption_filter`) and a
-different name (*Gemini Translate Caption*), so the two never get mixed up.
-Consequences when you switch:
-
-- Filters created by the original plugin (*Gemini Live Translate*) are not
-  recognized by this one. Remove them from the mic and add a **Gemini
-  Translate Caption** filter instead; the API key and other settings have to
-  be entered again.
-- A leftover *Gemini Translated Audio* source shows up as a missing source you
-  can simply remove; there is no speech output any more.
-- The Windows installer removes an installed `obs-live-translate.dll` so the
-  old filter does not linger in the *Filters* list. If you install by hand,
-  delete it yourself (with OBS closed) unless you want both plugins.
-
 ## Usage
 
 1. Add a *Text (GDI+)* source (macOS / Linux: *Text (FreeType 2)*) to your
@@ -188,10 +118,9 @@ Consequences when you switch:
 2. Add the **Gemini Translate Caption** filter to your microphone source
    (right-click the mic → *Filters* → **+** → *Gemini Translate Caption*). Paste
    your API key and pick a target language. The status reads *Paused (waiting
-   for sound)* until you say something, then *Connected*. (The screenshot
-   below predates the captions settings.)
+   for sound)* until you say something, then *Connected*.
 
-   ![Gemini Translate Caption filter properties](screenshots/micro-filters.png)
+   ![Gemini Translate Caption filter properties](screenshots/filter-config-en.png)
 
 3. In the filter pick your text source under **Caption Text Source**, and
    optionally the second one under **Source Transcript Text Source** to show
@@ -230,7 +159,7 @@ Consequences when you switch:
    Putting an OBS **Noise Gate** filter *above* this one in the filter list
    makes silence exactly zero, so any threshold works. After changing it, talk
    at your normal volume and check the status stays *Connected*.
-   **Only run while streaming, recording or virtual camera is active** keeps the
+   **Only run while streaming, recording or virtual camera** keeps the
    session closed (*Paused (output inactive)*) until one of those outputs
    starts; leave it off to test captions before going live. A paused session
    still clears the caption after **Caption Hold**.
@@ -282,6 +211,60 @@ Notes:
 - This is **set-only**. The runtime connection status (Connecting / Connected / Paused /
   API-key error) is not exposed over WebSocket — `GetSourceFilterSettings`
   returns the stored settings, not the live status.
+
+## How it works
+
+The plugin registers one OBS source: the **Gemini Translate Caption** *audio
+filter*. Add it to your microphone source. It resamples the mic to 16 kHz mono
+16-bit PCM, chunks it (100 ms / 3200-byte chunks) and streams it
+**continuously** — silence included, which the model uses to detect the end of
+an utterance — to `gemini-3.5-transcribe-live` (Live API speech-to-text, SMART
+mode) over a TLS WebSocket. Every finalized sentence is translated with the
+selected Flash-Lite model (generateContent, the previous three sentences as
+context) and written into an OBS **text source** you pick — so the subtitles
+use whatever font, outline and position you set on that source. A second,
+optional text source can show the source-language transcript live (interim
+text while you speak, replaced by the final sentence).
+
+Streaming silence still costs money, so the session **pauses itself**. A
+fresh session does not connect at all until it hears something (*Paused
+(waiting for sound)*), and once connected, a mic that stays below the idle
+threshold for **Idle Timeout** (default 5 minutes) closes the WebSocket again
+(*Paused (idle)*). Audio keeps being buffered while paused; the first chunk
+above the threshold connects (about 1–2 s), and the last second before it is
+sent along, so the first words are not lost. To check that a key works, just
+say a word and watch the status turn *Connected*. Optionally the filter can also run **only while
+streaming, recording or the virtual camera is active** (*Paused (output
+inactive)* otherwise). Translation requests are only made for finalized
+sentences, so a paused or silent session costs nothing on that side. See
+[`docs/specs/004-idle-pause-and-output-gating.md`](docs/specs/004-idle-pause-and-output-gating.md).
+
+```
+mic ─▶ [Gemini Translate Caption filter]
+          resample 16 kHz mono → chunk → WebSocket ─▶ gemini-3.5-transcribe-live
+                                                          │ interim / final text
+                                                          ▼
+       [Source Transcript text source] ◀── (optional) ◀──┤
+                                                          │ final sentence
+                                                          ▼
+                                       generateContent ─▶ gemini-3.1-flash-lite
+                                                          │ translation
+                                                          ▼
+       [Caption text source] ◀── CaptionComposer (in-order, N lines, hold timer)
+```
+
+Translations are shown in the order the sentences were spoken even when the
+model answers out of order; a sentence whose translation fails is skipped
+(logged) without blocking the next one. The plugin wraps every sentence itself
+to **Max Characters per Line** display units (CJK characters count as 2, so
+Korean/Japanese/Chinese lines hold half as many glyphs as Latin ones), keeps
+only the newest **Caption Lines** lines on screen, cuts a sentence that would
+not fit with `…`, and clears the source **Caption Hold** seconds after the last
+sentence — so the text source's box never grows past what you sized it for.
+The source transcript is wrapped the same way but keeps its *last* lines, so
+the newest words stay visible while you speak. A single shared `CaptionSession`
+owns the WebSocket (reconnect with backoff, proactive reconnect before the Live
+API's 10-minute cap) and three translation workers.
 
 ## Build from source
 
