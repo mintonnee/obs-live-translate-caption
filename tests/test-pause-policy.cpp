@@ -1,5 +1,6 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <string>
 #include "pause-policy.hpp"
 
@@ -202,4 +203,108 @@ TEST_CASE("pause_reason_name for all values")
     REQUIRE(std::string(pause_reason_name(PauseReason::None)) == "none");
     REQUIRE(std::string(pause_reason_name(PauseReason::OutputInactive)) == "output inactive");
     REQUIRE(std::string(pause_reason_name(PauseReason::Idle)) == "idle");
+}
+
+TEST_CASE("worker polling reaches idle after audio callbacks stop")
+{
+    IdleDetector d;
+    d.configure(300000);
+    d.start_idle(0);
+    d.feed(true, 1000);
+    // No more feed calls: an absent source must behave like silence.
+    REQUIRE_FALSE(d.poll(300999));
+    REQUIRE(d.poll(301000));
+    REQUIRE(d.poll(3600000));
+    REQUIRE_FALSE(d.feed(true, 3600100));
+    REQUIRE_FALSE(d.awaiting_signal());
+    REQUIRE_FALSE(d.poll(3900099));
+    REQUIRE(d.poll(3900100));
+}
+
+TEST_CASE("first signal establishes the timeout even without start or reset")
+{
+    IdleDetector d;
+    d.configure(300000);
+    REQUIRE_FALSE(d.feed(true, 1000));
+    REQUIRE(d.poll(301000));
+}
+
+TEST_CASE("start wait survives worker ticks and resumes on a single signal")
+{
+    IdleDetector d;
+    d.configure(300000);
+    d.start_idle(1000);
+    REQUIRE(d.poll(1100));
+    REQUIRE(d.poll(3600000));
+    REQUIRE(d.awaiting_signal());
+    REQUIRE_FALSE(d.feed(true, 3600100));
+    REQUIRE_FALSE(d.poll(3600200));
+    REQUIRE_FALSE(d.awaiting_signal());
+}
+
+TEST_CASE("settings updates preserve elapsed silence across multiple rotation intervals")
+{
+    IdleDetector d;
+    // The detector outlives WebSockets. Reapplying transport/display settings
+    // must preserve a timeout longer than the nine-minute socket lifetime.
+    const uint64_t timeout = GENERATE(600000ULL, 1800000ULL);
+    d.configure(timeout);
+    d.start_idle(0);
+    d.feed(true, 1000);
+    for (uint64_t now = 1100; now < timeout + 1000; now += 100) {
+        if ((now - 1000) % 540000 == 0) d.configure(timeout);
+        REQUIRE_FALSE(d.poll(now));
+    }
+    REQUIRE(d.poll(timeout + 1000));
+}
+
+TEST_CASE("timeout changes apply on a worker tick without another audio chunk")
+{
+    IdleDetector d;
+    d.configure(300000);
+    d.start_idle(0);
+    d.feed(true, 1000);
+    REQUIRE_FALSE(d.poll(201000));
+    d.configure(120000);
+    REQUIRE(d.poll(201100));
+    d.configure(600000);
+    REQUIRE_FALSE(d.poll(201200));
+    REQUIRE(d.poll(601000));
+    d.configure(0);
+    REQUIRE_FALSE(d.idle());
+    REQUIRE_FALSE(d.poll(3600000));
+}
+
+TEST_CASE("disabling startup wait clears it without audio")
+{
+    IdleDetector d;
+    d.configure(300000);
+    d.start_idle(0);
+    d.configure(0);
+    REQUIRE_FALSE(d.awaiting_signal());
+    REQUIRE_FALSE(d.poll(100));
+    d.configure(300000);
+    REQUIRE_FALSE(d.poll(200));
+    REQUIRE(d.poll(300000));
+}
+
+TEST_CASE("explicit output resume grants one new idle window without audio")
+{
+    IdleDetector d;
+    d.configure(300000);
+    d.start_idle(0);
+    REQUIRE(d.poll(600000));
+    d.reset(600000);
+    REQUIRE_FALSE(d.awaiting_signal());
+    REQUIRE_FALSE(d.poll(899999));
+    REQUIRE(d.poll(900000));
+}
+
+TEST_CASE("worker polling tolerates timestamps before the reference point")
+{
+    IdleDetector d;
+    d.configure(300000);
+    d.reset(1000);
+    REQUIRE_FALSE(d.poll(999));
+    REQUIRE(d.poll(301000));
 }

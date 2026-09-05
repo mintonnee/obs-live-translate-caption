@@ -15,8 +15,9 @@ double dbfs_to_rms(double dbfs);
 // feed(has_signal, now) is called once per audio chunk. A signal chunk records
 // `now` as the last signal time and returns false. A silent chunk returns true
 // iff a timeout is configured and now - last_signal >= timeout. The very first
-// feed() after construction (or after reset()) counts as the reference point:
-// it never reports idle by itself.
+// poll(now) also advances the timer without an audio chunk. The first feed or
+// poll after construction establishes the reference point; reset(now) establishes
+// it immediately. Connection changes must not reset this audio-based timer.
 //
 // start_idle(now) is the session-start rule (spec 004 §4.4): the detector is
 // idle right away and stays so through silence until the first signal chunk,
@@ -26,7 +27,8 @@ class IdleDetector {
 public:
     void configure(uint64_t timeout_ms); // 0 = never idle
     bool feed(bool has_signal, uint64_t now_ms);
-    void reset(uint64_t now_ms); // restart the timer from now (resume/connect)
+    bool poll(uint64_t now_ms); // worker tick, including when audio stops arriving
+    void reset(uint64_t now_ms); // explicit new window (stop / output resume)
     void start_idle(uint64_t now_ms); // idle until the first signal chunk
     bool idle() const;           // result of the last feed()
     bool awaiting_signal() const; // start_idle() armed and no signal seen yet

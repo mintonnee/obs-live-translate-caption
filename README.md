@@ -230,7 +230,8 @@ Streaming silence still costs money, so the session **pauses itself**. A
 fresh session does not connect at all until it hears something (*Paused
 (waiting for sound)*), and once connected, a mic that stays below the idle
 threshold for **Idle Timeout** (default 5 minutes) closes the WebSocket again
-(*Paused (idle)*). Audio keeps being buffered while paused; the first chunk
+(*Paused (idle)*). The timeout also advances when the source stops delivering
+audio entirely, and reconnects do not restart it. Audio keeps being buffered while paused; the first chunk
 above the threshold connects (about 1–2 s), and the last second before it is
 sent along, so the first words are not lost. To check that a key works, just
 say a word and watch the status turn *Connected*. Optionally the filter can also run **only while

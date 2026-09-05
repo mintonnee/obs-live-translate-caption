@@ -9,6 +9,8 @@
 #include <ixwebsocket/IXWebSocket.h>
 #include <obs.h>
 #include <chrono>
+#include <cmath>
+#include <limits>
 #include <optional>
 #include <utility>
 
@@ -158,27 +160,28 @@ void CaptionSession::configure(const CaptionConfig &cfg)
         idle_threshold_rms_.store(dbfs_to_rms(cfg.idle_threshold_dbfs));
         std::lock_guard<std::mutex> lk(idle_mtx_);
         idle_detector_.configure(static_cast<uint64_t>(timeout) * 1000);
-        // Turning the timeout off resumes on the next chunk anyway; clearing
-        // the flag here also covers a source that has stopped feeding audio.
-        if (timeout == 0) idle_.store(false);
     }
 
     blog(LOG_INFO,
          "[live-translate] configuring caption session: target=%s vocab=%zu "
-         "max_lines=%d max_width=%d hold=%.1fs",
+         "max_lines=%d max_width=%d hold=%.1fs idle_timeout=%ds "
+         "idle_threshold=%.1fdBFS only_while_output_active=%s",
          cfg.target_lang.c_str(), cfg.custom_vocabulary.size(), cfg.max_lines,
-         cfg.max_width, cfg.hold_seconds);
+         cfg.max_width, cfg.hold_seconds, cfg.idle_timeout_seconds,
+         cfg.idle_threshold_dbfs, cfg.only_while_output_active ? "true" : "false");
 
     if (reconnect) config_changed_ = true;
 
     if (!running_.exchange(true)) {
         // Session start: do not connect before anyone has spoken (spec 004
-        // §4.4). The gate in run() sees idle_ and waits for the first signal
+        // §4.4). The gate in run() polls and waits for the first signal
         // chunk; with the idle pause disabled start_idle() does nothing.
         {
             std::lock_guard<std::mutex> lk(idle_mtx_);
             idle_detector_.start_idle(now_ms());
-            idle_.store(idle_detector_.idle());
+            last_audio_ms_ = last_signal_ms_ = 0;
+            audio_chunks_ = signal_chunks_ = 0;
+            last_rms_ = peak_rms_ = 0.0;
         }
         // A previous run may have exited on its own (auth error) and left the
         // threads joinable. Reap them before reassigning, or the assignment
@@ -222,15 +225,13 @@ void CaptionSession::stop()
     next_seq_.store(0);
     interim_pending_.store(false);
     last_interim_ms_.store(0);
-    // The idle timer follows the audio that just got dropped: a stale idle
-    // flag would otherwise pause the next session before it ever sees a chunk.
+    // The idle timer follows the audio that just got dropped.
     // output_active_ is left alone: it is a plugin-wide fact, not session state.
     {
         std::lock_guard<std::mutex> lk(idle_mtx_);
         idle_detector_.reset(now_ms());
-        idle_.store(false);
     }
-    announced_pause_ = PauseReason::None; // run() is joined above
+    announced_pause_detail_.clear(); // run() is joined above
 
     TextSink caption_sink, source_sink;
     {
@@ -258,10 +259,19 @@ void CaptionSession::push_input_pcm(const uint8_t *data, size_t len)
     // Audio thread: an RMS over one 3200-byte chunk plus a short critical
     // section held by nobody else for long. No logging, no waiting on the
     // WebSocket thread.
-    const bool has_signal =
-        s16le_has_signal(data, len, idle_threshold_rms_.load());
+    const double rms = s16le_rms(data, len);
+    const bool has_signal = rms >= idle_threshold_rms_.load();
     std::lock_guard<std::mutex> lk(idle_mtx_);
-    idle_.store(idle_detector_.feed(has_signal, now_ms()));
+    const uint64_t now = now_ms();
+    idle_detector_.feed(has_signal, now);
+    last_audio_ms_ = now;
+    last_rms_ = rms;
+    if (rms > peak_rms_) peak_rms_ = rms;
+    ++audio_chunks_;
+    if (has_signal) {
+        last_signal_ms_ = now;
+        ++signal_chunks_;
+    }
 }
 
 void CaptionSession::push_job(TranslateJob job)
@@ -405,62 +415,97 @@ void CaptionSession::tick()
     // clear_source_if_idle().
     clear_source_if_idle();
     render_and_publish();
+    const uint64_t now = now_ms();
+    if (elapsed_ms(last_diagnostic_ms_, now) >= 30000) {
+        last_diagnostic_ms_ = now;
+        log_idle_diagnostics(LOG_DEBUG, true);
+    }
 }
 
 PauseReason CaptionSession::current_pause_reason()
 {
     PauseInputs in;
     {
-        // cfg_mtx_ is released before the atomics are read; no other lock is
-        // taken here, so this stays outside the cfg_mtx_ -> out_mtx_ order.
+        // Release cfg_mtx_ before taking idle_mtx_.
         std::lock_guard<std::mutex> lk(cfg_mtx_);
         in.only_while_output = cfg_.only_while_output_active;
     }
     in.output_active = output_active_.load();
-    in.idle = idle_.load();
+    const bool output_blocked = in.only_while_output && !in.output_active;
+    {
+        std::lock_guard<std::mutex> lk(idle_mtx_);
+        const uint64_t now = now_ms();
+        // Explicit output resume gets a new window, even if silence would
+        // otherwise keep the gate closed. Ordinary reconnects never reset it.
+        if (output_was_blocked_ && !output_blocked)
+            idle_detector_.reset(now);
+        in.idle = idle_detector_.poll(now);
+    }
+    output_was_blocked_ = output_blocked;
     return resolve_pause(in);
 }
 
-PauseReason CaptionSession::wait_while_paused()
+PauseReason CaptionSession::wait_while_paused(PauseReason held)
 {
-    PauseReason held = current_pause_reason();
-    if (held == PauseReason::None) return PauseReason::None;
-
-    while (running_ && !config_changed_) {
+    while (running_) {
+        PauseReason now_reason = current_pause_reason();
+        if (now_reason == PauseReason::None) return held;
+        held = now_reason;
+        announce_pause(held);
         // Only the display tick runs here: no connect attempt, no backoff, so
         // a long pause leaves no Connecting/reconnect lines (criterion 8).
         tick();
         std::this_thread::sleep_for(
             std::chrono::milliseconds(static_cast<int>(kTickMs)));
+    }
+    return PauseReason::None; // stopping
+}
 
-        PauseReason now_reason = current_pause_reason();
-        if (now_reason == PauseReason::None) return held;
-        if (now_reason != held) {
-            // The reason changed under us (say the output stopped while the
-            // mic was already idle): keep the status text honest, but do not
-            // repeat the pause log line for what is still one pause.
-            held = now_reason;
-            set_status(ConnStatus::Paused,
-                       held == PauseReason::Idle && awaiting_sound()
-                           ? "waiting for sound"
-                           : pause_reason_name(held));
+void CaptionSession::log_idle_diagnostics(int level, bool reset_window)
+{
+    long long audio_age, signal_age;
+    uint64_t chunks, signals, timeout;
+    double rms, peak;
+    {
+        std::lock_guard<std::mutex> lk(idle_mtx_);
+        const uint64_t now = now_ms();
+        audio_age = last_audio_ms_ ? static_cast<long long>(elapsed_ms(last_audio_ms_, now)) : -1;
+        signal_age = last_signal_ms_ ? static_cast<long long>(elapsed_ms(last_signal_ms_, now)) : -1;
+        chunks = audio_chunks_;
+        signals = signal_chunks_;
+        rms = last_rms_;
+        peak = peak_rms_;
+        timeout = idle_detector_.timeout_ms();
+        if (reset_window) {
+            audio_chunks_ = signal_chunks_ = 0;
+            peak_rms_ = 0.0;
         }
     }
-    return PauseReason::None; // stopping or reconfiguring: nothing to resume
+    const auto dbfs = [](double value) {
+        return value > 0.0 ? 20.0 * std::log10(value / 32767.0)
+                           : -std::numeric_limits<double>::infinity();
+    };
+    blog(level, "[live-translate] caption idle diagnostics: "
+         "last_audio_ms_ago=%lld last_signal_ms_ago=%lld "
+         "last_rms_dbfs=%.1f peak_rms_dbfs=%.1f chunks=%llu signal_chunks=%llu "
+         "timeout_ms=%llu threshold_dbfs=%.1f",
+         audio_age, signal_age, dbfs(rms), dbfs(peak),
+         static_cast<unsigned long long>(chunks),
+         static_cast<unsigned long long>(signals),
+         static_cast<unsigned long long>(timeout), dbfs(idle_threshold_rms_.load()));
 }
 
-bool CaptionSession::awaiting_sound()
-{
-    std::lock_guard<std::mutex> lk(idle_mtx_);
-    return idle_detector_.awaiting_signal();
-}
-
-bool CaptionSession::pause_until_resumed(PauseReason reason)
+void CaptionSession::announce_pause(PauseReason reason)
 {
     // A session-start wait is an idle pause that has never heard a signal;
     // it gets its own wording so a fresh key does not read as a failure.
-    const bool waiting = reason == PauseReason::Idle && awaiting_sound();
-    if (reason != announced_pause_) {
+    bool waiting;
+    {
+        std::lock_guard<std::mutex> lk(idle_mtx_);
+        waiting = reason == PauseReason::Idle && idle_detector_.awaiting_signal();
+    }
+    const std::string detail = waiting ? "waiting for sound" : pause_reason_name(reason);
+    if (detail != announced_pause_detail_) {
         int timeout = 0;
         if (reason == PauseReason::Idle) {
             std::lock_guard<std::mutex> lk(cfg_mtx_);
@@ -475,36 +520,36 @@ bool CaptionSession::pause_until_resumed(PauseReason reason)
         else
             blog(LOG_INFO,
                  "[live-translate] caption session paused: output inactive");
-        announced_pause_ = reason;
+        announced_pause_detail_ = detail;
+        log_idle_diagnostics(LOG_INFO);
     }
-    set_status(ConnStatus::Paused,
-               waiting ? "waiting for sound" : pause_reason_name(reason));
+    set_status(ConnStatus::Paused, detail);
+}
 
-    PauseReason held = wait_while_paused();
+bool CaptionSession::pause_until_resumed(PauseReason reason)
+{
+    announce_pause(reason);
+    PauseReason held = wait_while_paused(reason);
     if (!running_) return false;
-    if (held == PauseReason::None) return true; // config change; caller retries
 
     blog(LOG_INFO, "[live-translate] caption session resumed: %s",
          held == PauseReason::Idle ? "audio" : "output");
-    announced_pause_ = PauseReason::None;
+    announced_pause_detail_.clear();
     // Drop the silence that piled up while paused, keeping only the pre-roll.
     // Audio that arrives during the handshake stays queued and the send loop
     // flushes it right after open (the 5 s buffer drops the oldest on overflow).
     input_.keep_last(kResumePrerollBytes);
-    // A resume starts a full idle window, even when the mic is still quiet
-    // because it was the output state that unblocked us (spec 004 §4.4).
-    {
-        std::lock_guard<std::mutex> lk(idle_mtx_);
-        idle_detector_.reset(now_ms());
-        idle_.store(false);
-    }
+    // Audio already set the signal timestamp. Output resume is handled in the
+    // gate. Do not overwrite either with a transport/handshake timestamp.
     return true;
 }
 
 void CaptionSession::run()
 {
     Backoff backoff(1000, 30000);
-    announced_pause_ = PauseReason::None;
+    announced_pause_detail_.clear();
+    output_was_blocked_ = false;
+    last_diagnostic_ms_ = now_ms();
 
     while (running_) {
         std::string key;
@@ -516,9 +561,8 @@ void CaptionSession::run()
         }
         config_changed_ = false;
 
-        // Pause gate: nothing is connected while a reason holds, and the wait
-        // is entered with config_changed_ already cleared so a settings edit
-        // during a pause exits the wait exactly once (spec 004 §4.4).
+        // Nothing connects while a reason holds. Settings are read live by the
+        // gate; after resume the outer loop re-reads transport configuration.
         PauseReason gate = current_pause_reason();
         if (gate != PauseReason::None) {
             backoff.reset(); // a pause is not a failure
@@ -559,13 +603,8 @@ void CaptionSession::run()
                      "[live-translate] caption websocket opened; setup sent");
                 set_status(ConnStatus::Connected);
                 backoff.reset();
-                // A fresh connection always gets a full idle window, whatever
-                // the mic did while it was being established.
-                {
-                    std::lock_guard<std::mutex> lk(idle_mtx_);
-                    idle_detector_.reset(now_ms());
-                    idle_.store(false);
-                }
+                // The idle window belongs to audio activity, not this socket.
+                // Preserve it across rotation, network and settings reconnects.
             } else if (msg->type == ix::WebSocketMessageType::Message) {
                 CaptionServerMessage m = parse_caption_server_message(msg->str);
                 switch (m.kind) {
@@ -637,8 +676,9 @@ void CaptionSession::run()
         PauseReason pause_reason = PauseReason::None;
 
         while (running_ && !auth_error && !config_changed_ && !disconnected) {
-            size_t n = input_.read(chunk.data(), chunk.size());
-            if (n == chunk.size() && open) {
+            // Keep pre-roll and newly arriving speech until the socket opens.
+            size_t n = open ? input_.read(chunk.data(), chunk.size()) : 0;
+            if (n == chunk.size()) {
                 ws.send(build_realtime_input_message(chunk.data(), chunk.size()));
             } else {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -648,8 +688,7 @@ void CaptionSession::run()
             if (elapsed_ms(last_tick, now) >= kTickMs) {
                 last_tick = now;
                 tick();
-                // The pause inputs only move on an audio chunk or a frontend
-                // event, so the tick is a fine granularity to notice them.
+                // Advance elapsed-time detection even without audio callbacks.
                 pause_reason = current_pause_reason();
                 if (pause_reason != PauseReason::None) break;
             }

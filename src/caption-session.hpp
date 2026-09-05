@@ -119,17 +119,16 @@ private:
     void tick();
 
     // Auto-pause (spec 004 §4.4). All three run on the WebSocket thread.
-    // Config flag + output state + idle flag, resolved by resolve_pause().
+    // Config + output state + elapsed time, resolved by resolve_pause().
     PauseReason current_pause_reason();
     // Ticks at kTickMs while a pause reason holds. Returns the reason in
-    // effect when it cleared, or None when the wait ended for another cause
-    // (stop() or a config change), in which case there is nothing to resume.
-    PauseReason wait_while_paused();
+    // effect when it cleared. Settings are read live while waiting.
+    PauseReason wait_while_paused(PauseReason held);
     // One pause episode: announce (log + status), wait, then resume (log,
-    // pre-roll trim, idle timer reset). False = the session is stopping.
+    // pre-roll trim). False = the session is stopping.
     bool pause_until_resumed(PauseReason reason);
-    // True while the session-start wait (start_idle) has not heard a signal.
-    bool awaiting_sound();
+    void announce_pause(PauseReason reason);
+    void log_idle_diagnostics(int level, bool reset_window = false);
 
     // Current text-box limits. Takes cfg_mtx_ only: the lock order is cfg_mtx_
     // first, then out_mtx_, and the two are never held at the same time.
@@ -152,19 +151,23 @@ private:
     std::mutex cfg_mtx_;
     CaptionConfig cfg_;
 
-    // Idle detection. The detector is fed from the audio thread and reset from
-    // the UI (configure) and WebSocket (open / resume) threads, so idle_mtx_
-    // guards it together with the idle_ publication: that pairing keeps a
-    // concurrent feed() from re-publishing a stale idle after a reset. The
-    // threshold is an atomic so the audio thread computes its RMS outside the
-    // critical section. idle_mtx_ is a leaf: no other mutex is taken under it.
+    // Audio feeds and worker polls share one detector under idle_mtx_. No cached
+    // idle flag: elapsed time advances even if audio callbacks stop entirely.
+    // idle_mtx_ is a leaf: logging and other locks stay outside it.
     std::mutex idle_mtx_;
     IdleDetector idle_detector_;
     std::atomic<double> idle_threshold_rms_{0.0};
-    std::atomic<bool> idle_{false};
-    // Pause reason last written to the log, so a config change during a pause
-    // does not repeat the line. WebSocket thread only.
-    PauseReason announced_pause_ = PauseReason::None;
+    uint64_t last_audio_ms_ = 0;
+    uint64_t last_signal_ms_ = 0;
+    uint64_t audio_chunks_ = 0;
+    uint64_t signal_chunks_ = 0;
+    double last_rms_ = 0.0;
+    double peak_rms_ = 0.0;
+    // WebSocket thread only. Log once per actual detail change, including
+    // waiting-for-sound -> idle, and grant a new window on output resume.
+    std::string announced_pause_detail_;
+    bool output_was_blocked_ = false;
+    uint64_t last_diagnostic_ms_ = 0;
 
     // Guards the composer plus the sinks and the interim coalescing state.
     // Sinks are always invoked after this mutex is released.

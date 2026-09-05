@@ -66,6 +66,9 @@
 13. 호환(수동): 세 키가 없는 기존 씬 컬렉션을 열면 필터가 `Paused (waiting for sound)`로 시작해 첫 발화에 `Connected`가 되고, 속성창에 **Idle Timeout** 300, **Idle Threshold** -45, **Only while output is active** 꺼짐이 보인다.
 14. 임계값(수동): **Idle Threshold**를 -20 dBFS로 올리면 보통 말소리도 무음으로 판정되어 5분 뒤 일시정지되고, -90 dBFS로 내리면 마이크 노이즈 플로어만으로도 일시정지되지 않는다.
 15. 빌드/테스트: `cmake --build --preset windows-x64-vs2026`이 exit 0, `ctest --test-dir build_x64 -C RelWithDebInfo`가 전부 통과한다.
+16. 입력 중단: 마지막 신호 뒤 오디오 콜백이 전혀 없어도 워커의 `poll(now)`가 300초 경계에서 유휴를 판정한다. 첫 신호 한 청크로 즉시 해제된다(시간 주입 단위 테스트).
+17. 연결 독립성: 600초·1800초 timeout은 9분 회전과 설정 재적용을 거쳐도 마지막 신호 기준으로 만료된다. 소켓 open, 네트워크 재연결, 키·언어 변경은 유휴 시간을 초기화하지 않는다.
+18. 관측: 사유가 바뀔 때마다 `paused: <reason>`과 INFO 진단을 남긴다. 같은 상태의 반복 로그는 없으며, 입력 레벨·청크 수 요약만 30초 간격 DEBUG로 남긴다.
 
 ## 3. 전제 조건
 
@@ -123,13 +126,14 @@ README "Remote control" 표에 세 키를, "Usage" 3단계에 세 항목 설명�
 
 - `double dbfs_to_rms(double dbfs)`: `32767.0 × 10^(dbfs/20)`.
 - `class IdleDetector`:
-  - `void configure(uint64_t timeout_ms)`: 0이면 항상 비유휴.
+  - `void configure(uint64_t timeout_ms)`: 마지막 신호 시각을 보존한다. 0이면 유휴와 시작 대기를 즉시 해제한다.
   - `bool feed(bool has_signal, uint64_t now_ms)`: 신호면 `last_signal_ms_ = now`이고 false.
     무음이면 `timeout_ms > 0 && now - last_signal_ms_ >= timeout_ms`를 돌려준다.
-  - `void reset(uint64_t now_ms)`: 재개·연결·설정 변경 시 타이머를 now로 되돌린다.
+  - `bool poll(uint64_t now_ms)`: 오디오 없이도 경과 시간으로 유휴를 판정한다. 워커가 100ms 틱마다 호출한다.
+  - `void reset(uint64_t now_ms)`: 명시적인 새 유휴 시간(출력 연동 해제·출력 활성화에 따른 재개, stop)을 now부터 시작한다. 일반 재연결에는 호출하지 않는다.
   - `void start_idle(uint64_t now_ms)`: "아직 소리를 못 들은" 유휴로 진입한다. timeout이 0이 아니면
     다음 신호 청크까지 무음 `feed`가 true를 돌려준다. 신호 청크나 `reset`이 이 상태를 푼다.
-  - `bool idle() const`: 마지막 `feed` 결과. `bool awaiting_signal() const`: `start_idle` 뒤 아직
+  - `bool idle() const`: 마지막 `feed`/`poll` 결과(시작·reset·timeout 0도 즉시 반영). `bool awaiting_signal() const`: `start_idle` 뒤 아직
     신호를 못 봤는지(상태 문구 분기용).
 - `enum class PauseReason { None, OutputInactive, Idle }`.
 - `struct PauseInputs { bool only_while_output; bool output_active; bool idle; }`,
@@ -149,32 +153,37 @@ README "Remote control" 표에 세 키를, "Usage" 3단계에 세 항목 설명�
 추가하고, `ConnStatus`에 `Paused`를 추가한다. `status_text()`는 `Paused (idle)` /
 `Paused (output inactive)`를 돌려준다.
 
-- 신호 판정: `push_input_pcm()`이 청크마다 `s16le_has_signal(pcm, len, dbfs_to_rms(threshold))`를
-  계산해 `IdleDetector::feed()`에 넣고 결과를 `idle_` 원자값에 둔다. 오디오 스레드에서 3,200바이트
-  RMS 계산은 무시할 수 있는 비용이다. 링 버퍼 쓰기는 일시정지 여부와 관계없이 항상 한다.
+- 신호 판정: `push_input_pcm()`이 청크마다 RMS를 한 번 계산하고 임계값과 비교해 `IdleDetector::feed()`에 넣는다.
+  신호 청크가 마지막 신호 시각을 갱신한다. 별도 `idle_` 캐시는 두지 않고, detector와 진단 통계를
+  `idle_mtx_`로 보호한다. 오디오 스레드에서는 로그를 남기지 않는다. 링 버퍼는 일시정지 중에도 쓴다.
 - 출력 상태: `void set_output_active(bool)`가 `output_active_` 원자값을 갱신한다(§4.5가 호출).
-- 사유 결정: `run()`의 연결 루프와 대기 루프가 틱마다 `resolve_pause({cfg.only_while_output_active,
-  output_active_, idle_})`를 평가한다.
+- 사유 결정: `run()`의 연결 루프와 대기 루프가 틱마다 `IdleDetector::poll(now)`를 호출한 뒤
+  `resolve_pause({cfg.only_while_output_active, output_active_, idle})`를 평가한다.
+  입력 콜백이 중단되어도 마지막 신호부터 timeout이 지나면 유휴가 된다.
   - 연결 중 사유가 `None`이 아니면 `ws.stop()`으로 닫고 `paused: <reason>` 로그, 상태 `Paused`,
     `connected_at = 0`. backoff는 리셋한다(실패가 아니다).
-  - 대기 루프: `running_ && !config_changed_ && resolve_pause(...) != None`인 동안 100 ms 간격으로
-    틱(`flush_pending_source`, `clear_source_if_idle`, `render_and_publish`)만 돌린다. 연결·재연결
-    시도와 backoff 로그는 없다.
+  - 대기 루프: `running_ && resolve_pause(...) != None`인 동안 100 ms 간격으로 유휴 판정과
+    표시 틱(`flush_pending_source`, `clear_source_if_idle`, `render_and_publish`)을 돌린다.
+    설정은 대기 중에도 즉시 반영하며, 연결·재연결 시도와 backoff 로그는 없다.
+    사유 변경은 상태와 로그에 한 번씩 반영한다. 재개 뒤 연결 설정을 다시 읽는다.
   - 대기 루프를 벗어나면 `resumed: <audio|output>` 로그를 남기고, `input_.keep_last(kResumePrerollBytes)`
     (1초 = 32,000바이트)로 오래된 무음을 버린 뒤 새 연결로 넘어간다. 연결 대기 중 쌓인 오디오는
     open 직후 기존 전송 루프가 청크 단위로 한꺼번에 보낸다(5초 용량을 넘긴 부분은 기존대로 버린다).
+    open 전에는 전송 루프가 링 버퍼를 읽거나 버리지 않는다.
   - 시작 대기: `configure()`가 워커를 새로 띄우는 시점에 `IdleDetector::start_idle(now)`를 불러
-    `idle_`을 true로 둔다. `run()`의 게이트가 이를 `Idle` 사유로 잡아 연결 없이 대기하고, 첫 신호
+    detector를 유휴로 둔다. `run()`의 게이트가 이를 `Idle` 사유로 잡아 연결 없이 대기하고, 첫 신호
     청크가 기존 재개 경로(pre-roll 포함)로 연결한다. 상태 문구와 로그는 detector의
     `awaiting_signal()`이 참이면 `waiting for sound`, 아니면 `idle`이다. 재연결·출력 재개 경로는
-    `start_idle`을 부르지 않으므로 즉시 연결한다. 타임아웃이 0이면 `start_idle`이 아무것도 하지
+    `start_idle`을 부르지 않는다(일반 재연결은 누적 유휴 판정을 통과해야 연결한다). 타임아웃이 0이면 `start_idle`이 아무것도 하지
     않아 예전처럼 즉시 연결한다.
-  - 재개·연결 open 시 `IdleDetector::reset(now)`. 출력이 켜져 재개될 때 마이크가 조용하면 타임아웃
-    뒤 다시 유휴로 멈추는 것이 의도된 동작이다.
+  - 출력 연동으로 막혀 있다가 출력이 켜지거나 연동 옵션이 해제되면 `IdleDetector::reset(now)`를
+    한 번 호출해 즉시 재개한다. 계속 조용하면 timeout 뒤 다시 멈춘다.
+    신호에 의한 재개는 그 신호 시각을 보존한다. **소켓 open·9분 회전·네트워크 재연결·키/언어 변경은
+    detector를 reset하지 않는다.** 9분보다 긴 timeout도 누적 유휴 시간으로 만료된다.
 - 설정 변경: `configure()`는 `idle_timeout_seconds`, `idle_threshold_dbfs`를 detector에 즉시
-  반영한다. 타임아웃을 0으로 바꾸면 다음 `feed`에서 비유휴가 되어 재개된다(기준 12).
+  반영한다. 타임아웃을 0으로 바꾸면 즉시 비유휴가 되어 다음 워커 틱에서 재개된다(입력 불필요, 기준 12).
   `only_while_output_active`는 다음 틱의 `resolve_pause`에서 반영된다.
-- `stop()`은 detector를 `reset(now)`하고 `idle_`을 false로 되돌린다: `stop()`이 링 버퍼를 비우므로
+- `stop()`은 detector를 `reset(now)`해 비유휴로 되돌린다: `stop()`이 링 버퍼를 비우므로
   남은 유휴 플래그는 다음 세션이 청크를 보기도 전에 일시정지시키는 오탐이 된다(구현 중 결정).
   `output_active_`는 플러그인 전역 사실이라 건드리지 않는다. 상태는 기존처럼 `Idle`로 되돌린다. `filter_audio`의 `needs_start` 판정은 `is_running()` 기준이므로
   일시정지 중에도 `running_`이 참이라 재시작 루프가 돌지 않는다.
@@ -204,6 +213,15 @@ README "Remote control" 표에 세 키를, "Usage" 3단계에 세 항목 설명�
 | 일시정지 | `[live-translate] caption session paused: idle <timeout>s` / `paused: waiting for sound` / `paused: output inactive` |
 | 재개 | `[live-translate] caption session resumed: audio` / `resumed: output` |
 | 출력 상태 변화 | `[live-translate] output active: true` / `false` |
+| 설정 적용(INFO) | 기존 configuring 로그에 `idle_timeout`, `idle_threshold`, `only_while_output_active` 추가 |
+| 일시정지 진입·사유 변경(INFO) | `paused: <reason>` 뒤 `caption idle diagnostics: ...` |
+| 30초 간격(DEBUG) | `caption idle diagnostics: last_audio_ms_ago=... last_signal_ms_ago=... last_rms_dbfs=... peak_rms_dbfs=... chunks=... signal_chunks=... timeout_ms=... threshold_dbfs=...` |
+
+진단의 `*_ms_ago=-1`은 세션 시작 뒤 아직 해당 입력을 받지 않았다는 뜻이다. RMS 0은 `-inf` dBFS다.
+마지막 RMS는 마지막으로 받은 청크 값이며 입력 중단 여부는 `last_audio_ms_ago`로 판단한다.
+peak와 청크 수는 직전 DEBUG 요약 이후 누적값이다(첫 요약은 세션 시작 이후).
+배경음이 타이머를 갱신하는 경우 `signal_chunks`가 증가하고, 입력 자체가 끊긴 경우 청크 수가 0이며
+`last_audio_ms_ago`가 증가한다. DEBUG 주기 로그는 OBS의 verbose 로그를 활성화해야 파일에서 볼 수 있다.
 
 일시정지 중에는 `Connecting`, `reconnect` 로그가 나오지 않는다(기준 8).
 

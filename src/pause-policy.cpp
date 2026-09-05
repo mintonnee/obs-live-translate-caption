@@ -8,20 +8,28 @@ namespace lt {
 
 double dbfs_to_rms(double dbfs) { return 32767.0 * std::pow(10.0, dbfs / 20.0); }
 
-void IdleDetector::configure(uint64_t timeout_ms) { timeout_ms_ = timeout_ms; }
+void IdleDetector::configure(uint64_t timeout_ms)
+{
+    timeout_ms_ = timeout_ms;
+    if (timeout_ms == 0) {
+        idle_ = false;
+        awaiting_signal_ = false;
+    }
+}
 
 bool IdleDetector::feed(bool has_signal, uint64_t now_ms)
 {
     if (has_signal) {
-        last_signal_ms_ = now_ms;
-        idle_ = false;
-        awaiting_signal_ = false;
+        reset(now_ms);
         return false;
     }
+    return poll(now_ms);
+}
 
+bool IdleDetector::poll(uint64_t now_ms)
+{
     if (!started_) {
-        // First feed after construction/reset is the reference point: it
-        // never reports idle by itself.
+        // The first observation after construction establishes the window.
         started_ = true;
         last_signal_ms_ = now_ms;
         idle_ = false;
