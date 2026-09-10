@@ -111,6 +111,10 @@ UI: `output_mode`는 콤보(`Translated speech` / `Translated captions`). 텍스
 
 ### 4.3 STT 세션 (`CaptionSession`)
 
+계획된 확장: [005-caption-segments-and-versioning.md](005-caption-segments-and-versioning.md)가
+아래 final 전용 작업 생성을 긴 발화 분할·interim 선행 번역·SMART 수정 대조로 확장한다.
+005는 아직 구현 미착수이며 현재 구현과 아래 기록을 구분한다.
+
 `TranslationSession`과 같은 싱글턴/워커 스레드 구조를 따르되 별도 클래스로 둔다(오디오 출력
 버퍼, 인터럽트, 지연 버퍼가 없다).
 
@@ -127,6 +131,11 @@ UI: `output_mode`는 콤보(`Translated speech` / `Translated captions`). 텍스
   활성 쪽 상태를 보여준다.
 
 ### 4.4 번역 요청 (`translate-protocol` + HTTP 워커)
+
+계획된 확장: [005-caption-segments-and-versioning.md](005-caption-segments-and-versioning.md)
+§4.1·4.5–4.6이 요청 버전·3개 슬롯·큐 상한·설정 스냅샷을 정의하고,
+[006-translation-quality-and-retry.md](006-translation-quality-and-retry.md)가 도착 언어별
+프롬프트·별도 표기 사전·로컬 품질 검사·최대 1회 교정을 정의한다. 두 확장은 구현 미착수다.
 
 - 요청 빌더 `build_translate_request(target_code, target_name, context[], text)`:
   - `system_instruction`: "실시간 자막 번역기. 입력을 `<target_name> (<target_code>)`로 번역.
@@ -148,6 +157,10 @@ UI: `output_mode`는 콤보(`Translated speech` / `Translated captions`). 텍스
 ### 4.5 자막 구성기 (`CaptionComposer`, 순수 로직)
 
 표시 창을 세그먼트 수가 아니라 줄 폭·줄 수로 제한하는 확장은 `002-caption-text-box-limits`가 다룬다.
+
+이후 계획인 [005-caption-segments-and-versioning.md](005-caption-segments-and-versioning.md)
+§4.4는 구간을 보관해 표시 중 교체하고 긴 번역을 페이지로 표시한다. 구현 시 즉시 누적 표시와
+선두 대기·hold 회귀 기대 중 변경되는 범위는 005 §4.7을 따른다.
 
 시계를 주입받는(`now_ms` 인자) 순수 클래스로 두어 단위 테스트한다.
 
