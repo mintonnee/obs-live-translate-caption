@@ -3,7 +3,7 @@
 작성일: 2026-09-11
 대상: `001-caption-translation-pipeline.md` §4.3–4.5의 final 전용 번역·순서 처리와 `002-caption-text-box-limits.md`의 줄 창·잘라내기 정책 확장
 연관 스펙: `README.md`, `001-caption-translation-pipeline.md`, `002-caption-text-box-limits.md`, `004-idle-pause-and-output-gating.md`, `006-translation-quality-and-retry.md`
-상태: 구현 완료, OBS/API 검증 대기
+상태: 구현 완료, OBS 2시간 연속 스모크 확인; 개별·정량 API 검증 대기
 
 이 문서는 `001`과 `002`에서 긴 발화의 분할, SMART 전사 수정, 버전이 있는 번역 작업,
 표시 중인 구간의 교체와 적체 제한을 분리해 다룬다. 번역 품질 판정과 교정 요청 생성은
@@ -323,5 +323,8 @@ ctest --test-dir build_x64 -C RelWithDebInfo --no-tests=error --output-on-failur
   `git diff --check`는 exit 0이다.
 - 사용자가 2026-09-11 OBS 재시험에서 구간 사이 강제 줄바꿈 제거와 final 확정 시 자막
   유지·교체를 포함한 수정 동작이 안정적임을 확인했다.
+- 사용자가 2026-09-12 Windows OBS에서 약 2시간 연속 스모크 테스트 중 큰 문제를
+  관찰하지 않았다. 이 결과는 장시간 안정성 신호이며 아래 개별 절차와 정량 비교를
+  대체하지 않는다.
 - 동일 sink 경고·final-only 전환·일시정지 보존의 개별 수동 절차와 기준 14–15의
   API 지연·요청 수·누락률 정량 비교는 별도 검증 대기 상태다.

@@ -2,8 +2,8 @@
 
 [English](README.md) | **한국어**
 
-[![Latest release](https://img.shields.io/github/v/release/plan12be/obs-live-translate-caption?sort=semver)](https://github.com/plan12be/obs-live-translate-caption/releases)
-[![Release build](https://github.com/plan12be/obs-live-translate-caption/actions/workflows/release.yaml/badge.svg)](https://github.com/plan12be/obs-live-translate-caption/actions/workflows/release.yaml)
+[![Latest release](https://img.shields.io/github/v/release/mintonnee/obs-live-translate-caption?sort=semver)](https://github.com/mintonnee/obs-live-translate-caption/releases)
+[![Release build](https://github.com/mintonnee/obs-live-translate-caption/actions/workflows/release.yaml/badge.svg)](https://github.com/mintonnee/obs-live-translate-caption/actions/workflows/release.yaml)
 [![License: GPL v2](https://img.shields.io/badge/license-GPLv2-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
@@ -39,10 +39,11 @@
 ## 현재 상태
 
 **Windows, macOS, Linux**용으로 빌드됩니다. 버전 태그를 푸시하면 이 저장소의
-[Releases](https://github.com/plan12be/obs-live-translate-caption/releases) 페이지에 빌드된
+[Releases](https://github.com/mintonnee/obs-live-translate-caption/releases) 페이지에 빌드된
 패키지가 올라갑니다. 그 전에는 소스에서 빌드하세요(아래 참고). 원 프로젝트의 음성 전용 릴리스는
 [weisunglee/obs-live-translate](https://github.com/weisunglee/obs-live-translate/releases)에 그대로
-있습니다. 테스트한 플랫폼은 Windows입니다. *설치* 항목의 안내를 참고하세요. 현재 동작:
+있습니다. 테스트한 플랫폼은 Windows입니다. 릴리즈별 변경은
+[CHANGELOG.md](CHANGELOG.md)를 참고하세요. *설치* 항목의 안내를 참고하세요. 현재 동작:
 
 - ✅ **실시간 자막**: `gemini-3.5-transcribe-live`로 음성 인식, 선택 가능한 Flash-Lite 모델로 세그먼트
   단위 번역, OBS 텍스트 소스에 출력(원문 텍스트 소스는 선택). 순서 보장, SMART 수정 교체,
@@ -70,15 +71,13 @@
   동작하고 나머지는 속성창 경고와 함께 비활성화됩니다(첫 번째를 제거하면 다른 쪽이 이어받습니다).
   플러그인은 STT 스트림을 하나만 돌리므로 **서로 다른 두 소스에 필터를 추가**하는 것은 지원하지
   않습니다(둘 다 한 세션에 오디오를 넣게 됩니다). 소스 하나에만 두세요.
-- ⚠️ 005 구현과 자동 회귀 테스트는 완료했지만, incremental 표시·SMART 수정·시간 계측의 OBS 및
-  실제 API 검증은 아직 대기 중입니다.
 - ❌ 원 프로젝트의 음성→음성 출력(*Gemini Translated Audio* 소스, 에코·재생 지연 옵션)은
   제거했습니다. 이 플러그인은 필터 id와 이름이 달라 원 플러그인과 충돌하지 않으며, 원 플러그인으로
   만든 필터는 다시 추가해야 합니다.
 
 ## 설치 (빌드된 패키지)
 
-[Releases](https://github.com/plan12be/obs-live-translate-caption/releases) 페이지에서 플랫폼에 맞는
+[Releases](https://github.com/mintonnee/obs-live-translate-caption/releases) 페이지에서 플랫폼에 맞는
 패키지를 내려받거나(또는 *소스에서 빌드* 참고) 직접 빌드한 뒤, **OBS를 닫은 상태에서** 설치합니다.
 
 - **Windows** — `…-windows-x64-installer.exe`를 실행하거나(OBS 설치 위치를 자동으로 찾습니다)

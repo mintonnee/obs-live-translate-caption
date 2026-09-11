@@ -2,8 +2,8 @@
 
 **English** | [한국어](README.ko.md)
 
-[![Latest release](https://img.shields.io/github/v/release/plan12be/obs-live-translate-caption?sort=semver)](https://github.com/plan12be/obs-live-translate-caption/releases)
-[![Release build](https://github.com/plan12be/obs-live-translate-caption/actions/workflows/release.yaml/badge.svg)](https://github.com/plan12be/obs-live-translate-caption/actions/workflows/release.yaml)
+[![Latest release](https://img.shields.io/github/v/release/mintonnee/obs-live-translate-caption?sort=semver)](https://github.com/mintonnee/obs-live-translate-caption/releases)
+[![Release build](https://github.com/mintonnee/obs-live-translate-caption/actions/workflows/release.yaml/badge.svg)](https://github.com/mintonnee/obs-live-translate-caption/actions/workflows/release.yaml)
 [![License: GPL v2](https://img.shields.io/badge/license-GPLv2-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)
 
@@ -47,9 +47,11 @@ Notes:
 
 ## Status
 
+See [CHANGELOG.md](CHANGELOG.md) for release-by-release changes.
+
 Builds for **Windows, macOS and Linux**. Prebuilt packages are published on
 this repository's
-[Releases](https://github.com/plan12be/obs-live-translate-caption/releases) page
+[Releases](https://github.com/mintonnee/obs-live-translate-caption/releases) page
 once a version tag is pushed; until then, build from source (see below). The
 speech-only releases of the original project remain at
 [weisunglee/obs-live-translate](https://github.com/weisunglee/obs-live-translate/releases).
@@ -90,9 +92,6 @@ Windows is the tested platform; see the note under *Install*. Current behavior:
   runs a single STT stream, so adding the **filter to two different sources**
   is unsupported (both would feed the one session) — keep it on a single
   source.
-- ⚠️ The 005 implementation and automated regression suite are complete; OBS
-  and live API validation of incremental display, SMART revisions and timing is
-  still pending.
 - ❌ The speech-to-speech output of the original project (the *Gemini
   Translated Audio* source, echo and playback-delay options) was removed. This
   plugin uses its own filter id and name, so it does not conflict with the
@@ -101,7 +100,7 @@ Windows is the tested platform; see the note under *Install*. Current behavior:
 ## Install (prebuilt)
 
 Download the package for your platform from the
-[Releases](https://github.com/plan12be/obs-live-translate-caption/releases) page
+[Releases](https://github.com/mintonnee/obs-live-translate-caption/releases) page
 (or build it yourself, see *Build from source*), then install it **with OBS
 closed**:
 

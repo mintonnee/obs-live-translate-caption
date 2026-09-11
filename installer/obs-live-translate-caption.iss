@@ -7,7 +7,7 @@
 #endif
 #define MyAppName "OBS Live Translate Caption"
 #define MyAppPublisher "plan12be"
-#define MyAppURL "https://github.com/plan12be/obs-live-translate-caption"
+#define MyAppURL "https://github.com/mintonnee/obs-live-translate-caption"
 
 [Setup]
 ; Keep AppId stable across versions so upgrades/uninstall work.
