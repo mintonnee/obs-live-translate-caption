@@ -1,4 +1,5 @@
 #pragma once
+#include "caption-segment.hpp"
 #include <string>
 #include <string_view>
 #include <vector>
@@ -27,9 +28,8 @@ struct TranslateRequest {
     // context only; the model must translate only `text`.
     std::vector<std::string> context;
     std::string text; // the source segment to translate
-    // Spec 002 §4.5: when > 0, the system instruction asks to keep the
-    // translation within about this many characters (lines x width). 0 = no
-    // length hint.
+    // Deprecated compatibility field. Pagination, not prompt compression,
+    // enforces the display box, so this value is intentionally ignored.
     int max_chars = 0;
     // Proper nouns / terms the transcriber was biased toward (the filter's
     // custom vocabulary). When non-empty, the system instruction lists them as
@@ -54,8 +54,22 @@ std::string build_translate_request(const TranslateRequest &req);
 
 struct TranslateResult {
     bool ok = false;
+    TranslationFailure failure = TranslationFailure::Parse;
     std::string text;  // trimmed concatenation of candidates[0].content.parts[*].text
     std::string error; // reason when !ok (API error message, "no candidates", "parse error", ...)
+};
+
+// Feed HTTP chunks directly here (disable the transport's body accumulation).
+// On false, request transport cancellation; do not parse the partial body.
+class BoundedTranslationResponse {
+public:
+    static constexpr size_t MaxBytes = 64 * 1024;
+    bool append(std::string_view chunk);
+    bool exceeded() const { return exceeded_; }
+    const std::string &body() const { return body_; }
+private:
+    std::string body_;
+    bool exceeded_ = false;
 };
 
 // Parses a generateContent response body. {"error": {...}} -> !ok with the

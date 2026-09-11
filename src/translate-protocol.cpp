@@ -46,11 +46,6 @@ std::string build_system_instruction(const TranslateRequest &req)
          "the whole input is already in ";
     s += target;
     s += ", return it as-is with punctuation fixed.";
-    if (req.max_chars > 0) {
-        s += " Within about ";
-        s += std::to_string(req.max_chars);
-        s += " characters if possible.";
-    }
     s += " Always answer in ";
     s += target;
     s += ".";
@@ -121,6 +116,11 @@ std::string build_translate_request(const TranslateRequest &req)
 TranslateResult parse_translate_response(const std::string &json_text)
 {
     TranslateResult r;
+    if (json_text.size() > BoundedTranslationResponse::MaxBytes) {
+        r.failure = TranslationFailure::ResponseLimit;
+        r.error = "response limit";
+        return r;
+    }
 
     json j = json::parse(json_text, nullptr, false);
     if (j.is_discarded() || !j.is_object()) {
@@ -129,6 +129,7 @@ TranslateResult parse_translate_response(const std::string &json_text)
     }
 
     if (j.contains("error")) {
+        r.failure = TranslationFailure::Http;
         const auto &err = j["error"];
         if (err.is_object() && err.contains("message") && err["message"].is_string())
             r.error = err["message"].get<std::string>();
@@ -138,6 +139,7 @@ TranslateResult parse_translate_response(const std::string &json_text)
     }
 
     if (!j.contains("candidates") || !j["candidates"].is_array() || j["candidates"].empty()) {
+        r.failure = TranslationFailure::Empty;
         r.error = "no candidates";
         return r;
     }
@@ -146,25 +148,45 @@ TranslateResult parse_translate_response(const std::string &json_text)
     if (!candidate0.is_object() || !candidate0.contains("content") ||
         !candidate0["content"].is_object() || !candidate0["content"].contains("parts") ||
         !candidate0["content"]["parts"].is_array()) {
+        r.failure = TranslationFailure::Empty;
         r.error = "no candidates";
         return r;
     }
 
     std::string text;
     for (const auto &part : candidate0["content"]["parts"]) {
-        if (part.is_object() && part.contains("text") && part["text"].is_string())
-            text += part["text"].get<std::string>();
+        if (part.is_object() && part.contains("text") && part["text"].is_string()) {
+            const auto &piece = part["text"].get_ref<const std::string &>();
+            if (piece.size() > 16 * 1024 - text.size()) {
+                r.failure = TranslationFailure::ResponseLimit;
+                r.error = "translation limit";
+                return r;
+            }
+            text += piece;
+        }
     }
 
     std::string trimmed = trim(text);
     if (trimmed.empty()) {
+        r.failure = TranslationFailure::Empty;
         r.error = "empty text";
         return r;
     }
 
     r.ok = true;
+    r.failure = TranslationFailure::None;
     r.text = trimmed;
     return r;
+}
+
+bool BoundedTranslationResponse::append(std::string_view chunk)
+{
+    if (exceeded_ || chunk.size() > MaxBytes - body_.size()) {
+        exceeded_ = true;
+        return false;
+    }
+    body_.append(chunk.data(), chunk.size());
+    return true;
 }
 
 }

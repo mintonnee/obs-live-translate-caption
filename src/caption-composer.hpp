@@ -1,103 +1,166 @@
 #pragma once
-#include <cstddef>
-#include <cstdint>
+#include "caption-segment.hpp"
 #include <deque>
-#include <map>
-#include <optional>
-#include <string>
-#include <vector>
 
-// Orders translated segments, keeps the on-screen window, and clears it after a
-// hold timeout. Pure logic: every method takes the clock (`now_ms`) as an
-// argument so tests can drive time. Not thread-safe; the caption session
-// serializes calls with its own mutex.
-// The window is a list of wrapped lines bounded by `max_lines` x `max_width`
-// display units, so the OBS text source never grows past its box.
-// Spec: docs/specs/001-caption-translation-pipeline.md §4.5, criteria 3, 4, 7;
-// docs/specs/002-caption-text-box-limits.md §4.3, criteria 7, 8, 13.
 namespace lt {
 
 struct CaptionComposerConfig {
-    int max_lines = 2;        // lines kept on screen (1-6)
-    int max_width = 60;       // line width in display units (10-120), see caption-wrap.hpp
-    uint64_t hold_ms = 4000;  // clear the display this long after the last emission
+    int max_lines = 2;       // 1-6 lines in the rolling display window
+    int max_width = 60;      // 10-120 display units
+    uint64_t hold_ms = 4000; // 1000-30000 ms from the latest visible page/update
 };
 
-// A translated segment whose wrapped text did not fit into `max_lines` and was
-// cut short by render(). The session logs these (spec 002 criterion 8).
+// Legacy adapter only. Normal pagination never truncates.
 struct CaptionTruncation {
-    uint64_t seq = 0;  // segment that was cut
-    int lines = 0;     // wrapped line count before cutting
-    int kept = 0;      // lines kept (== max_lines at the time)
+    uint64_t seq = 0;
+    int lines = 0;
+    int kept = 0;
 };
 
+enum class CaptionComposeReject {
+    None, InvalidId, StaleGeneration, ReusedId, MissingSegment, RetiredSegment,
+    StaleRevision, StaleAttempt, Duplicate, RevisionConflict, Expired,
+    ResourceLimit, EmptyTranslation, ReconcileAmbiguous
+};
+enum class CaptionDisplayEventKind { PageEntered, PageReplaced, Retired, RemainderDiscarded };
+
+struct CaptionDisplayEvent {
+    CaptionDisplayEventKind kind = CaptionDisplayEventKind::Retired;
+    SegmentKey key;
+    CaptionRetireReason reason = CaptionRetireReason::None;
+    size_t page_index = 0;
+    size_t discarded_pages = 0;
+    uint64_t at_ms = 0;
+};
+struct CaptionComposeResult {
+    bool accepted = false;
+    CaptionComposeReject reject = CaptionComposeReject::None;
+    std::vector<CaptionDisplayEvent> events;
+};
+struct CaptionSnapshot {
+    uint64_t publication = 0; // Monotonic across resets; serialize sink publication.
+    std::optional<SegmentKey> key;
+    TranslationJobId job;
+    CaptionDisplayStatus display;
+    std::string text;
+};
+struct CaptionRenderResult {
+    std::optional<std::string> changed; // Includes identity changes with identical text.
+    CaptionSnapshot snapshot;
+    std::vector<CaptionDisplayEvent> events;
+};
+
+// Pure, thread-unsafe reducer. Under one session lock, apply all completions then
+// tick once. Only tick appends a new page to the rolling line window. Publish its
+// snapshot outside that lock.
 class CaptionComposer {
 public:
-    explicit CaptionComposer(CaptionComposerConfig cfg = {});
+    static constexpr size_t kMaxManaged = 256;
+    static constexpr size_t kMaxWaiting = 24;
+    static constexpr size_t kMaxTranslationBytes = 16 * 1024;
+    static constexpr uint64_t kStaleBeforeDisplayMs = 6000;
+    // Caps undisplayed remaining pages, but never shortens the final page's hold.
+    static constexpr uint64_t kSegmentLifetimeMs = 15000;
 
-    // Takes effect on the next emitted segment. A smaller `max_lines` drops
-    // lines from the front of the window immediately; a changed `max_width`
-    // does not re-wrap lines that are already on screen.
-    void set_config(const CaptionComposerConfig &cfg);
+    explicit CaptionComposer(CaptionComposerConfig cfg = {});
+    CaptionComposeResult reset_generation(uint64_t generation, uint64_t now_ms);
+    CaptionComposeResult register_segment(const CaptionSegment &segment, uint64_t now_ms);
+    // Register a replacement group atomically before injecting completions.
+    CaptionComposeResult register_segments(const std::vector<CaptionSegment> &segments,
+                                           uint64_t now_ms);
+    // A final transcript may revise or invalidate its visible interim. Keep the
+    // existing snapshot for one hold interval while reconciliation runs.
+    CaptionComposeResult confirm_final(const SegmentKey &visible_key, uint64_t now_ms);
+    CaptionComposeResult expect_job(const TranslationJobId &id, uint64_t now_ms);
+    CaptionComposeResult complete(const TranslationCompletion &completion, uint64_t now_ms);
+    CaptionComposeResult retire(const SegmentKey &key, CaptionRetireReason reason, uint64_t now_ms);
+    CaptionRenderResult tick(uint64_t now_ms);
+    CaptionSnapshot snapshot() const { return published_; }
+    std::optional<CaptionDisplayStatus> display_status(const SegmentKey &key) const;
+    bool forget_retired(const SegmentKey &key);
+    size_t managed_count() const { return segments_.size(); }
+    size_t waiting_count() const;
+
+    CaptionComposeResult set_config(const CaptionComposerConfig &cfg, uint64_t now_ms);
+    void set_config(const CaptionComposerConfig &cfg); // Deferred until next tick.
     CaptionComposerConfig config() const;
 
-    // Register a finalized source segment. `seq` is strictly increasing per
-    // session; segments are emitted in `seq` order regardless of the order in
-    // which on_translated()/on_failed() arrive.
+    // Pre-005 session compatibility only. seq must increase across clear; these
+    // callbacks carry no generation, so new integrations must use typed IDs above.
     void push_final(uint64_t seq, const std::string &source_text, uint64_t now_ms);
-
-    // Translation outcome for `seq`. Unknown seqs are ignored. A failed segment
-    // is skipped (never displayed) but no longer blocks later segments.
     void on_translated(uint64_t seq, const std::string &translated_text, uint64_t now_ms);
     void on_failed(uint64_t seq, const std::string &reason, uint64_t now_ms);
-
-    // Returns the display string when it changed since the previous render()
-    // call, std::nullopt when unchanged. Emits every leading segment whose
-    // outcome is known (in seq order), wrapping each to `max_width` and
-    // appending its lines to the window. Returns "" exactly once when the
-    // display is non-empty and now_ms >= last emission time + hold_ms; a later
-    // emission restarts the timer.
     std::optional<std::string> render(uint64_t now_ms);
-
-    // Truncations recorded by render() since the last call; cleared on return.
-    std::vector<CaptionTruncation> take_truncations();
-
-    // Most recent `max` pushed source texts (any state), oldest first. Used as
-    // translation context; call it *before* push_final() for the new segment.
+    std::vector<CaptionTruncation> take_truncations(); // Always empty; use events.
     std::vector<std::string> context(size_t max) const;
-
-    // Segments pushed but not yet resolved (translated or failed).
     size_t pending_count() const;
-
-    // Forget everything; the next render() reports "" if something was shown.
     void clear();
 
 private:
-    enum class SegmentState { Pending, Translated, Failed };
-
+    struct Page { std::string text; size_t end_byte = 0; };
     struct Segment {
-        SegmentState state = SegmentState::Pending;
-        std::string text;  // translated text once state == Translated
+        CaptionSegment source;
+        TranslationJobId expected;
+        TranslationJobId translated_job;
+        CaptionDisplayStatus status;
+        uint64_t registered_ms = 0;
+        bool processed = false;
+        bool ambiguous_prefix = false;
+        std::optional<SegmentKey> anchor;
+        std::string text;
+        size_t consumed_bytes = 0;
+        std::deque<Page> pages;
     };
-
-    // Bound on the source texts kept for context().
-    static constexpr size_t kMaxContext = 16;
-
-    // Wraps `text`, cuts it to `max_lines` (recording a truncation) and appends
-    // the lines to the window. Returns false when there is nothing to show.
-    bool emit_segment(uint64_t seq, const std::string &text);
-    void trim_window();
-    std::string build_display() const;
-
+    struct Slot {
+        SegmentKey key;
+        TranslationJobId job;
+        CaptionDisplayStatus status;
+        uint64_t hold_started_ms = 0; // Display update or final confirmation.
+        bool final_confirmed = false;
+        std::string text;
+        std::string completed_prefix;
+        bool ambiguous_prefix = false;
+        bool placeholder = false;
+        bool replacement_dirty = false;
+        bool retire_after_minimum = false;
+    };
+    struct WindowChunk {
+        SegmentKey key;
+        std::string text;
+        bool starts_page = false; // Preserve pagination, not translation boundaries.
+    };
+    Segment *find(const SegmentKey &key);
+    const Segment *find(const SegmentKey &key) const;
+    std::deque<Page> paginate(const std::string &text, size_t begin) const;
+    void confirm_visible_final(uint64_t now_ms);
+    void retire_segment(Segment &segment, CaptionRetireReason reason, uint64_t now_ms,
+                        std::vector<CaptionDisplayEvent> &events);
+    void expire(uint64_t now_ms, std::vector<CaptionDisplayEvent> &events);
+    void clear_slot(CaptionRetireReason reason, uint64_t now_ms,
+                    std::vector<CaptionDisplayEvent> &events,
+                    bool preserve_window = false);
+    std::string window_text() const;
+    void replace_window_chunk(const SegmentKey &old_key, const SegmentKey &new_key,
+                              const std::string &text, bool starts_page);
+    void update_visible(Segment &segment, std::string text, uint64_t now_ms,
+                        std::vector<CaptionDisplayEvent> &events);
+    void enter(Segment &segment, uint64_t now_ms,
+               std::vector<CaptionDisplayEvent> &events, bool inherit = false);
+    Segment *next_waiting() const;
+    Segment *replacement_head() const;
+    void enforce_waiting(uint64_t now_ms, std::vector<CaptionDisplayEvent> &events);
+    void apply_config(const CaptionComposerConfig &cfg, uint64_t now_ms,
+                      std::vector<CaptionDisplayEvent> &events);
+    uint64_t generation_ = 0;
+    uint64_t high_water_ = 0;
+    uint64_t last_now_ms_ = 0;
     CaptionComposerConfig cfg_;
-    std::map<uint64_t, Segment> segments_;  // pushed, not yet emitted/skipped
-    std::deque<std::string> lines_;         // on-screen lines, oldest first
-    std::deque<std::string> sources_;       // pushed source texts, oldest first
-    std::vector<CaptionTruncation> truncations_;  // since the last take_truncations()
-    std::string last_display_;                    // what the previous render() showed
-    uint64_t last_emit_ms_ = 0;
-    uint64_t last_seq_ = 0;
-    bool has_pushed_ = false;
+    std::optional<CaptionComposerConfig> pending_config_;
+    std::vector<Segment> segments_;
+    std::optional<Slot> slot_;
+    std::deque<WindowChunk> window_;
+    CaptionSnapshot published_;
+    std::deque<std::string> legacy_sources_;
 };
 
 }

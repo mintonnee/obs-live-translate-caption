@@ -44,14 +44,16 @@
 [weisunglee/obs-live-translate](https://github.com/weisunglee/obs-live-translate/releases)에 그대로
 있습니다. 테스트한 플랫폼은 Windows입니다. *설치* 항목의 안내를 참고하세요. 현재 동작:
 
-- ✅ **실시간 자막**: `gemini-3.5-transcribe-live`로 음성 인식, 선택 가능한 Flash-Lite 모델로 문장
-  단위 번역, OBS 텍스트 소스에 출력(원문 텍스트 소스는 선택). 순서 보장, 문장 단위 실패 격리,
+- ✅ **실시간 자막**: `gemini-3.5-transcribe-live`로 음성 인식, 선택 가능한 Flash-Lite 모델로 세그먼트
+  단위 번역, OBS 텍스트 소스에 출력(원문 텍스트 소스는 선택). 순서 보장, SMART 수정 교체,
+  세그먼트 단위 실패 격리,
   유지 시간 뒤 자동 비움, Live API 10분 세션 제한 전 자동 재연결.
   [`docs/specs/001-caption-translation-pipeline.md`](docs/specs/001-caption-translation-pipeline.md) 참고.
-- ✅ **자막 텍스트 박스 제한**: 문장을 설정한 폭(한중일 문자 고려)과 줄 수로 줄바꿈해 텍스트 소스가
-  넘치지 않게 합니다. 너무 긴 문장은 `…`로 자르고 로그를 남기며, 번역 프롬프트에도 박스 안에 맞추라고
-  요청합니다.
-  [`docs/specs/002-caption-text-box-limits.md`](docs/specs/002-caption-text-box-limits.md) 참고.
+- ✅ **세그먼트·페이지 자막**: 긴 발화의 안정된 앞부분을 final 전에 번역할 수 있습니다. 결과는 설정한
+  폭(한중일 문자 고려)과 줄 수로 줄바꿈하고, 넘치는 내용을 `…`로 버리지 않습니다. 세그먼트별 페이지를
+  순서대로 최근 줄 창 아래에 붙이고 가장 오래된 줄부터 밀어냅니다. 같은 final 발화의 세그먼트는
+  설정한 줄 폭 안에서 같은 줄에 이어 붙입니다.
+  [`docs/specs/005-caption-segments-and-versioning.md`](docs/specs/005-caption-segments-and-versioning.md) 참고.
 - ✅ **사용자 사전**은 고유명사 인식을 돕고 번역기에 용어집으로 전달됩니다. **번역 모델**을 고를 수
   있습니다.
 - ✅ 지수 backoff 재연결, API 키·번역 언어 실시간 변경.
@@ -63,8 +65,8 @@
   동작하고 나머지는 속성창 경고와 함께 비활성화됩니다(첫 번째를 제거하면 다른 쪽이 이어받습니다).
   플러그인은 STT 스트림을 하나만 돌리므로 **서로 다른 두 소스에 필터를 추가**하는 것은 지원하지
   않습니다(둘 다 한 세션에 오디오를 넣게 됩니다). 소스 하나에만 두세요.
-- ⚠️ 자막은 문장을 마친 뒤 잠시 후 나타납니다. 인식기가 말이 멈춘 뒤 문장을 확정하고, 이어서 번역
-  왕복(보통 1.5초 이내)이 따라옵니다.
+- ⚠️ 005 구현과 자동 회귀 테스트는 완료했지만, incremental 표시·SMART 수정·시간 계측의 OBS 및
+  실제 API 검증은 아직 대기 중입니다.
 - ❌ 원 프로젝트의 음성→음성 출력(*Gemini Translated Audio* 소스, 에코·재생 지연 옵션)은
   제거했습니다. 이 플러그인은 필터 id와 이름이 달라 원 플러그인과 충돌하지 않으며, 원 플러그인으로
   만든 필터는 다시 추가해야 합니다.
@@ -104,16 +106,20 @@
    소스**에 두 번째 소스를 고릅니다. **자막 줄 수**(1–6, 기본 2)와 **한 줄 최대 글자 수**(10–120,
    기본 60, 한중일 문자는 2로 계산)가 플러그인이 줄바꿈할 텍스트 박스를 정합니다. 기본값은
    1920×1080 장면에 폰트 크기 48 기준으로 한 줄에 한글 약 30자, 라틴 문자 약 60자입니다.
-   **자막 유지 시간 (초)**(1–30)는 마지막 줄이 남아 있는 시간입니다. **사용자 사전**에는 쉼표로
+   **자막 유지 시간 (초)**(1–30)는 마지막 페이지나 성공한 표시 갱신 뒤 자막이 남아 있는 시간입니다. **사용자 사전**에는 쉼표로
    구분한 이름이나 용어를 넣으면 인식이 그쪽으로 기울고, 번역기에도 고유명사 용어집으로 전달되어
    일반 단어로 의역되지 않고 대상 언어의 외래어 표기(음차, 또는 관례상 라틴 문자 그대로)로
    나옵니다. **번역 모델**은 generateContent 모델을 고릅니다(기본
    `gemini-3.1-flash-lite`, 목록은 편집 가능하므로 계정에서 쓸 수 있는 모델 id는 무엇이든 됩니다.
    모르는 id는 로그에 `translate failed: HTTP 404`로 나타납니다). Lite가 아닌 모델은 기본적으로
-   더 오래 생각하므로 지연이 늘어납니다. 텍스트 소스 자체에서는 *자동 줄바꿈*과 *사용자 지정 텍스트
+   더 오래 생각하므로 지연이 늘어납니다. **발화 중 미리 번역**은 기본으로 켜져 있으며 발화의 안정된
+   부분을 확정 전에 번역합니다. SMART 전사가 앞부분을 수정할 수 있어 보이는 자막이 갱신될 수 있습니다.
+   끄면 final만 번역하되 분할·버전 검사·페이지 표시는 유지합니다. 텍스트 소스 자체에서는
+   *자동 줄바꿈*과 *사용자 지정 텍스트
    범위 사용*을 **끄고**(플러그인이 이미 줄바꿈하므로 두 번 나뉩니다) 가로 정렬을 가운데로 두세요.
    자막 소스를 고르기 전에는 상태가 *자막을 표시하려면 자막 텍스트 소스를 지정하세요*이고, 이름을
-   잘못 적으면 *Caption text source "…" not found*가 뜹니다.
+   잘못 적으면 *Caption text source "…" not found*가 뜹니다. 번역과 원문에는 서로 다른 소스를
+   고르세요. 두 이름이 같은 non-empty 값이면 번역 자막을 우선하고 원문 출력은 비활성화됩니다.
 
 4. 자동 일시정지 설정(모두 즉시 반영되며 재연결하지 않습니다):
    **유휴 타임아웃 (초, 0 = 끊지 않음)**(0–1800, 기본 300)은 그만큼 무음이 이어지면 STT 스트림을
@@ -150,10 +156,11 @@
 | `api_key` | string | Gemini API 키(원격으로 보낼 일은 드뭅니다. 비우면 세션이 멈춥니다) |
 | `caption_text_source` | string | 번역 자막을 받을 텍스트 소스 이름 |
 | `caption_source_text_source` | string | 원문 인식 결과용 텍스트 소스(선택). 비우면 끕니다 |
+| `caption_incremental_translation` | bool | `true`(기본)는 발화 중 안정된 interim 세그먼트를 미리 번역. `false`는 final만 번역하되 분할·버전·페이지 처리는 유지 |
 | `caption_max_lines` | int | 화면에 남길 줄 수, 1–6으로 제한 |
 | `caption_max_chars_per_line` | int | 줄 폭(표시 단위, 한중일 = 2), 10–120으로 제한 |
 | `caption_max_segments` | int | 레거시(002 이전). `caption_max_lines`가 한 번도 설정되지 않았을 때만 줄 수로 읽습니다 |
-| `caption_hold_seconds` | number | 마지막 문장 뒤 자막 소스를 비우기까지의 초, 1–30으로 제한 |
+| `caption_hold_seconds` | number | 마지막 페이지나 성공한 표시 갱신 뒤 자막 소스를 비우기까지의 초, 1–30으로 제한 |
 | `caption_custom_vocabulary` | string | 쉼표로 구분한 구문. 인식기에는 사용자 사전으로, 번역기에는 고유명사 용어집(음차하되 일반 단어로 번역하지 않음)으로 전달 |
 | `translate_model` | string | 번역에 쓰는 generateContent 모델 id(기본 `gemini-3.1-flash-lite`). 계정에서 쓸 수 있는 id는 무엇이든 가능(예: `gemini-3.5-flash-lite`, `gemini-flash-lite-latest`). 다음 문장부터 적용 |
 | `idle_timeout_seconds` | int | STT 스트림을 일시정지하기까지의 무음(임계값 미만) 시간, 0–1800으로 제한. `0`은 무음으로 끊지 않음. 일시정지 중에 `0`으로 바꾸면 즉시 재개 |
@@ -166,8 +173,11 @@
   Translate Caption*이며, 이 이름은 일부러 번역하지 않아 한국어 OBS에서도 같습니다).
 - 요청의 기본값 `overlay: true`(병합)를 유지하세요. `overlay: false`면 OBS가 먼저 필터를 기본값으로
   되돌리는데 `api_key`에는 기본값이 없어 **키가 지워지고 번역이 멈춥니다**.
-- `target_lang`이나 사전을 바꾸면 STT 세션이 재연결되어 잠깐 끊깁니다. 자막 박스, 모델, 자동
-  일시정지 설정은 즉시 반영됩니다.
+- `target_lang`이나 인식 사전을 바꾸면 STT 세션이 재연결되어 잠깐 끊깁니다. 자막 박스, 모델, 자동
+  일시정지 설정은 즉시 반영됩니다. `caption_incremental_translation`을 바꾸면 STT 연결과 표시 중인
+  provisional 자막은 유지하고 아직 표시되지 않은 현재 provisional 작업만 무효화합니다.
+- `caption_text_source`와 `caption_source_text_source`가 같은 non-empty 이름이면 번역 자막을
+  우선하고 원문 출력을 비활성화합니다.
 - 제거된 음성 번역 모드의 키(`output_mode`, `echo_target`, `playback_delay`)는 클라이언트가 보내도
   무시됩니다.
 - **쓰기 전용**입니다. 실행 중 연결 상태(Connecting / Connected / Paused / API 키 오류)는 WebSocket으로
@@ -179,8 +189,10 @@
 마이크 소스에 추가하세요. 필터는 마이크 소리를 16 kHz 모노 16비트 PCM으로 리샘플링하고 100 ms
 (3200바이트) 청크로 잘라, TLS WebSocket으로 `gemini-3.5-transcribe-live`(Live API 음성 인식,
 SMART 모드)에 **끊김 없이** 보냅니다. 무음도 함께 보내는데, 모델이 문장 끝을 판단하는 데 쓰기
-때문입니다. 확정된 문장은 선택한 Flash-Lite 모델(generateContent, 직전 세 문장을 문맥으로 전달)이
-번역해 지정한 OBS **텍스트 소스**에 씁니다. 그래서 자막은 그 소스에 설정한 폰트, 외곽선, 위치를
+때문입니다. 안정된 세그먼트는 발화 중 번역할 수 있고, final은 선행 결과와 대조합니다. SMART 수정은
+새 세그먼트 버전으로 처리해 아직 활성인 자막만 교체합니다. 선택한 Flash-Lite 모델(generateContent,
+직전 세 세그먼트를 문맥으로 전달)이 번역해 지정한 OBS **텍스트 소스**에 씁니다. 그래서 자막은 그
+소스에 설정한 폰트, 외곽선, 위치를
 그대로 따릅니다. 선택 사항으로 두 번째 텍스트 소스에 원문 인식 결과를 실시간으로 보여 줄 수 있습니다
 (말하는 동안은 중간 결과, 문장이 끝나면 확정 문장으로 교체).
 
@@ -191,8 +203,8 @@ SMART 모드)에 **끊김 없이** 보냅니다. 무음도 함께 보내는데, 
 중에도 오디오는 계속 버퍼에 쌓이고, 임계값을 넘는 첫 청크가 들어오면 연결하며(약 1–2초) 그 직전
 1초도 함께 보내므로 첫 단어가 잘리지 않습니다. 키가 제대로 동작하는지 보려면 한마디 하고 상태가
 *Connected*로 바뀌는지 확인하면 됩니다. 필요하면 **방송·녹화·가상 카메라가 켜져 있을 때만** 실행하게
-할 수도 있습니다(그 외에는 *Paused (output inactive)*). 번역 요청은 확정된 문장에만 보내므로,
-일시정지 중이거나 조용할 때는 번역 쪽 비용도 없습니다.
+할 수도 있습니다(그 외에는 *Paused (output inactive)*). 일시정지 중이거나 조용할 때는 번역 요청을
+보내지 않습니다.
 [`docs/specs/004-idle-pause-and-output-gating.md`](docs/specs/004-idle-pause-and-output-gating.md)를
 참고하세요.
 
@@ -202,20 +214,27 @@ mic ─▶ [Gemini Translate Caption filter]
                                                           │ interim / final text
                                                           ▼
        [Source Transcript text source] ◀── (optional) ◀──┤
-                                                          │ final sentence
+                                                          │ stable / final segments
                                                           ▼
                                        generateContent ─▶ gemini-3.1-flash-lite
                                                           │ translation
                                                           ▼
-       [Caption text source] ◀── CaptionComposer (in-order, N lines, hold timer)
+       [Caption text source] ◀── CaptionPipeline (versioned, in-order pages)
 ```
 
-모델이 순서를 바꿔 응답해도 번역은 말한 순서대로 표시됩니다. 번역에 실패한 문장은 로그만 남기고
-건너뛰며 다음 문장을 막지 않습니다. 플러그인은 모든 문장을 **한 줄 최대 글자 수**(표시 단위, 한중일
+모델이 순서를 바꿔 응답해도 번역은 세그먼트 순서대로 누적 표시됩니다. 번역에 실패한 세그먼트는 로그만
+남기고
+건너뛰며 다음 세그먼트를 막지 않습니다. 번역 구간이나 발화가 바뀌어도 강제 줄바꿈 없이 공백으로
+이어 붙이고, 텍스트에 포함된 명시적 줄바꿈은 유지합니다. 플러그인은 각 세그먼트를 **한 줄 최대 글자 수**(표시 단위, 한중일
 문자는 2로 계산하므로 한국어·일본어·중국어 줄에는 라틴 문자의 절반이 들어갑니다)에 맞춰 직접
-줄바꿈하고, 최신 **자막 줄 수**만큼만 화면에 남기며, 다 들어가지 않는 문장은 `…`로 자르고, 마지막
-문장 뒤 **자막 유지 시간**이 지나면 소스를 비웁니다. 그래서 텍스트 소스의 박스가 처음 잡아 둔 크기를
-넘지 않습니다. 원문 소스도 같은 방식으로 줄바꿈하되 *마지막* 줄들을 남겨 말하는 동안 최신 단어가
+줄바꿈하고, 긴 결과는 최대 **자막 줄 수**의 연속 페이지로 표시합니다. 새 페이지는 최근 줄 창 아래에
+붙고 오래된 줄부터 밀려나며, 마지막 페이지 뒤 **자막 유지 시간**이 지나면 창 전체를 비웁니다. 그래서
+표시 중 번역이 성공적으로 갱신되면 그 시점부터 유지 시간을 다시 계산합니다. 말하는 도중 표시된
+번역의 발화가 최종 확정되면, 원문이 수정되거나 문장 구간이 합쳐져도 확정 시점부터 유지 시간을
+다시 계산하고 새 번역이 준비될 때까지 기존 자막을 유지합니다. 이전 표시 기록과의 대응이 모호해
+수정 번역을 반영할 수 없으면 기존 자막을 유지 시간이 끝날 때까지 표시하며 다음 발화는 정상 진행합니다.
+이미 만료된 자막은 다시 표시하지 않습니다. 텍스트 소스의 박스는 처음
+잡아 둔 크기를 넘지 않습니다. 원문 소스도 같은 방식으로 *마지막* 줄들을 남겨 말하는 동안 최신 단어가
 보이게 합니다. 하나의 공유 `CaptionSession`이 WebSocket(backoff 재연결, Live API 10분 제한 전
 선제 재연결)과 번역 워커 세 개를 관리합니다.
 
@@ -297,7 +316,8 @@ ctest --test-dir build_x64 -R "<test case name>" --output-on-failure
 `unit-tests` 타깃은 순수 로직(base64, 링 버퍼, backoff, 오디오 변환, 오디오 페이싱/타임스탬프,
 Gemini 프로토콜 파싱, 자막 프로토콜, 번역 요청/응답, 자막 구성기, 자막 줄바꿈)을 다루며 libobs가
 **필요 없습니다**. 자막 모듈은 독립 바이너리(`caption-protocol`, `translate-protocol`,
-`caption-composer`, `caption-wrap`, ctest 이름은 `<module>/` 접두사)로도 빌드되므로 나머지를
+`caption-segmenter`, `translation-scheduler`, `caption-composer`, `caption-pipeline`, `caption-wrap`,
+ctest 이름은 `<module>/` 접두사)로도 빌드되므로 나머지를
 컴파일하지 않고 한 모듈만 반복 작업할 수 있습니다.
 
 ## 프로젝트 구조
@@ -307,11 +327,14 @@ src/
   plugin-main.cpp        모듈 진입점, 필터 등록
   filter.cpp             마이크 필터: 리샘플 → 청크 → 자막 세션에 전달
   caption-session.*      STT WebSocket + 번역 워커 + 텍스트 싱크 + 재연결 + 자동 일시정지
+  caption-pipeline.*     세그먼트/버전 reducer, 제한된 번역 스케줄링과 표시 효과
+  caption-segmenter.*    안정 interim/final 분할과 SMART 수정 대조
+  translation-scheduler.* 제한·버전 인식 번역 작업 큐
   pause-policy.*         유휴 판정(dBFS 임계값 + 타임아웃)과 일시정지 사유 (순수 로직)
   output-state.*         obs-frontend-api로 방송/녹화/가상 카메라 상태 수신
   caption-protocol.*     gemini-3.5-transcribe-live 메시지 + 오디오 프레임 생성/파싱
   translate-protocol.*   Flash-Lite generateContent 요청/응답
-  caption-composer.*     순서 보장 줄 창, 잘라내기 + 유지 타이머 (순수 로직)
+  caption-composer.*     순서 보장 rolling 페이지 창, 교체 + 유지 타이머 (순수 로직)
   caption-wrap.*         표시 폭(한중일 = 2) 기준 줄바꿈 (순수 로직)
   caption-output.*       이름으로 OBS 텍스트 소스에 자막 쓰기
   audio-convert.*        PCM 다운믹스 / 변환 / 청킹

@@ -5,6 +5,33 @@
 using namespace lt;
 using nlohmann::json;
 
+TEST_CASE("HTTP response chunks are bounded before parsing")
+{
+    BoundedTranslationResponse response;
+    REQUIRE(response.append(std::string(65535, 'x')));
+    REQUIRE(response.append("x"));
+    REQUIRE_FALSE(response.append("x"));
+    REQUIRE(response.exceeded());
+    REQUIRE(response.body().size() == 65536);
+    REQUIRE_FALSE(response.append(""));
+    REQUIRE(parse_translate_response(std::string(65537, 'x')).failure ==
+            TranslationFailure::ResponseLimit);
+}
+
+TEST_CASE("translation bytes and malformed UTF8 are explicitly rejected")
+{
+    auto body = [](const std::string &value) {
+        return json{{"candidates", {{{"content", {{"parts", {{{"text", value}}}}}}}}}}.dump();
+    };
+    REQUIRE(parse_translate_response(body(std::string(16384, 'a'))).ok);
+    REQUIRE(parse_translate_response(body(std::string(16385, 'a'))).failure ==
+            TranslationFailure::ResponseLimit);
+    std::string invalid = "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"";
+    invalid += char(0xff);
+    invalid += "\"}]}}]}";
+    REQUIRE(parse_translate_response(invalid).failure == TranslationFailure::Parse);
+}
+
 TEST_CASE("translate endpoint url matches the documented generateContent path")
 {
     REQUIRE(translate_endpoint_url() ==
@@ -64,7 +91,7 @@ TEST_CASE("system instruction handles input already in the target language")
     REQUIRE(instr.find("as-is") != std::string::npos);
 }
 
-TEST_CASE("system instruction adds the length hint when max_chars is positive")
+TEST_CASE("system instruction ignores the obsolete box compression hint")
 {
     TranslateRequest req;
     req.target_code = "ja";
@@ -76,8 +103,7 @@ TEST_CASE("system instruction adds the length hint when max_chars is positive")
     json j = json::parse(body);
     std::string instr = j["system_instruction"]["parts"][0]["text"].get<std::string>();
 
-    REQUIRE(instr.find("80 characters") != std::string::npos);
-    REQUIRE(instr.find("Within about 80 characters if possible.") != std::string::npos);
+    REQUIRE(instr.find("characters") == std::string::npos);
     // Existing behaviour must still hold when max_chars is set.
     REQUIRE(instr.find("Japanese (ja)") != std::string::npos);
     REQUIRE(instr.find("no quotes") != std::string::npos);
@@ -368,8 +394,7 @@ TEST_CASE("system instruction ends with the target-language reminder even withou
     const std::string tail = "Always answer in Japanese (ja).";
     REQUIRE(instr.size() >= tail.size());
     REQUIRE(instr.compare(instr.size() - tail.size(), tail.size(), tail) == 0);
-    // The length hint stays before the reminder.
-    REQUIRE(instr.find("80 characters") < instr.find("Always answer in"));
+    REQUIRE(instr.find("80 characters") == std::string::npos);
     // Latency budget: the whole instruction stays compact.
     REQUIRE(instr.size() < 450);
 }

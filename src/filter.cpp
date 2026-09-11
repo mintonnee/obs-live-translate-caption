@@ -49,6 +49,7 @@ struct FilterData {
     std::string target_lang = "en";
     std::string caption_text_source;
     std::string caption_source_text_source;
+    bool caption_incremental_translation = true;
     int caption_max_lines = kDefaultCaptionLines;
     int caption_max_width = kDefaultCaptionWidth;
     double caption_hold_seconds = 4.0;
@@ -112,6 +113,7 @@ lt::CaptionConfig make_caption_config(const FilterData *d)
     cfg.target_name = target_language_name(d->target_lang);
     cfg.custom_vocabulary = split_custom_vocabulary(d->caption_custom_vocabulary);
     cfg.translate_model = d->translate_model;
+    cfg.incremental = d->caption_incremental_translation;
     cfg.max_lines = d->caption_max_lines;
     cfg.max_width = d->caption_max_width;
     cfg.hold_seconds = d->caption_hold_seconds;
@@ -128,6 +130,8 @@ void install_caption_sinks(const FilterData *d)
 {
     std::string caption_name = d->caption_text_source;
     std::string source_name = d->caption_source_text_source;
+    if (!caption_name.empty() && source_name == caption_name)
+        source_name.clear();
     lt::CaptionSession::TextSink caption_sink =
         [caption_name](const std::string &text) {
             lt::caption_output_write(caption_name, text);
@@ -208,12 +212,21 @@ void filter_update(void *data, obs_data_t *settings)
         obs_data_get_string(settings, "caption_source_text_source");
 
     // A name we no longer target keeps whatever text was written to it last;
-    // blank it so a stale caption does not linger on screen.
+    // blank it so a stale caption does not linger on screen. Never clear a
+    // source that becomes either new sink: in particular, an old source-
+    // transcript sink may become the translated-caption sink in this update.
+    std::string effective_source = caption_source_text_source;
+    if (!caption_text_source.empty() &&
+        effective_source == caption_text_source)
+        effective_source.clear();
     if (!d->caption_text_source.empty() &&
-        d->caption_text_source != caption_text_source)
+        d->caption_text_source != caption_text_source &&
+        d->caption_text_source != effective_source)
         lt::caption_output_write(d->caption_text_source, "");
     if (!d->caption_source_text_source.empty() &&
-        d->caption_source_text_source != caption_source_text_source)
+        d->caption_source_text_source != d->caption_text_source &&
+        d->caption_source_text_source != caption_text_source &&
+        d->caption_source_text_source != effective_source)
         lt::caption_output_write(d->caption_source_text_source, "");
 
     d->caption_text_source = caption_text_source;
@@ -247,6 +260,8 @@ void filter_update(void *data, obs_data_t *settings)
                    kMinIdleThresholdDbfs, kMaxIdleThresholdDbfs);
     d->only_while_output_active =
         obs_data_get_bool(settings, "only_while_output_active");
+    d->caption_incremental_translation =
+        obs_data_get_bool(settings, "caption_incremental_translation");
     d->caption_custom_vocabulary =
         obs_data_get_string(settings, "caption_custom_vocabulary");
 
@@ -371,6 +386,9 @@ std::string filter_status_text(FilterData *d)
 {
     if (d && !is_primary_filter(d))
         return obs_module_text("Status.DuplicateFilter");
+    if (d && !d->caption_text_source.empty() &&
+        d->caption_source_text_source == d->caption_text_source)
+        return obs_module_text("Status.SameTextSource");
     std::string missing = lt::caption_output_missing_source();
     if (!missing.empty())
         return "Caption text source \"" + missing + "\" not found";
@@ -403,6 +421,9 @@ obs_properties_t *filter_properties(void *data)
     obs_property_list_add_string(lists.caption, obs_module_text("None"), "");
     obs_property_list_add_string(lists.source, obs_module_text("None"), "");
     obs_enum_sources(add_text_source_cb, &lists);
+    obs_properties_add_text(
+        props, "caption_text_source_info",
+        obs_module_text("CaptionTextSourceInfo"), OBS_TEXT_INFO);
 
     obs_properties_add_int_slider(
         props, "caption_max_lines", obs_module_text("CaptionLines"),
@@ -418,6 +439,12 @@ obs_properties_t *filter_properties(void *data)
     obs_properties_add_text(
         props, "caption_custom_vocabulary",
         obs_module_text("CustomVocabulary"), OBS_TEXT_DEFAULT);
+    obs_properties_add_bool(
+        props, "caption_incremental_translation",
+        obs_module_text("IncrementalTranslation"));
+    obs_properties_add_text(
+        props, "caption_incremental_translation_info",
+        obs_module_text("IncrementalTranslationInfo"), OBS_TEXT_INFO);
 
     // Editable so a model id that is not listed yet can be typed in. Ids come
     // from the Gemini model docs; availability depends on the account.
@@ -463,6 +490,7 @@ void filter_defaults(obs_data_t *settings)
     // obs_data_has_user_value() to detect a stored legacy value.
     obs_data_set_default_double(settings, "caption_hold_seconds", 4.0);
     obs_data_set_default_string(settings, "caption_custom_vocabulary", "");
+    obs_data_set_default_bool(settings, "caption_incremental_translation", true);
     obs_data_set_default_string(settings, "translate_model", lt::kTranslateModel);
     // Absent from scene collections written before spec 004; the defaults keep
     // those behaving as before except for the 5-minute idle pause (criterion 13).

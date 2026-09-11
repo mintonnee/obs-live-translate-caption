@@ -1,13 +1,13 @@
 #pragma once
-#include "caption-composer.hpp"
+#include "caption-pipeline.hpp"
 #include "pause-policy.hpp"
 #include "ring-buffer.hpp"
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -15,13 +15,14 @@
 
 // Shared singleton for the captions output mode: one WebSocket to
 // gemini-3.5-transcribe-live (worker thread, reconnect + backoff, 9-minute
-// proactive reconnect), an HTTP worker that translates finalized segments with
-// the Flash-Lite model (kTranslateModel), and a CaptionComposer that orders/windows the result.
+// proactive reconnect), three HTTP workers and a serialized CaptionPipeline.
 // Display is delegated to sinks installed by the filter (caption-output.cpp),
 // so this class knows nothing about OBS text sources.
 // Spec: docs/specs/001-caption-translation-pipeline.md §4.3, §4.4, §4.7,
 // criteria 7, 8, 12; docs/specs/002-caption-text-box-limits.md §4.4, §4.5,
 // criteria 8, 9.
+namespace ix { struct HttpRequestArgs; }
+
 namespace lt {
 
 // Connection state of the caption session, surfaced in the filter's status text.
@@ -35,6 +36,9 @@ struct CaptionConfig {
     std::string target_name;                    // English name for the prompt
     std::vector<std::string> custom_vocabulary; // empty = omitted from setup
     std::string translate_model;                // generateContent model id; empty = default
+    bool incremental = true;
+    // Empty uses custom_vocabulary; translation-only changes do not reopen STT.
+    std::vector<std::string> translation_vocabulary;
     int max_lines = 2;                          // displayed lines, 1-6
     int max_width = 60;                         // line width in display units, 10-120
     double hold_seconds = 4.0;                  // 1-30
@@ -81,22 +85,17 @@ private:
     CaptionSession(const CaptionSession &) = delete;
     CaptionSession &operator=(const CaptionSession &) = delete;
 
-    // One finalized transcript segment waiting for its translation.
-    struct TranslateJob {
-        uint64_t seq = 0;
-        std::string text;                   // source transcript
-        std::vector<std::string> context;   // up to 3 previous source segments
-        uint64_t t_final_ms = 0;            // when the final arrived
-        uint64_t stt_final_ms = 0;          // last interim -> final latency
-    };
-
     void run();              // WebSocket worker (STT stream)
     void translate_worker(); // HTTP worker (generateContent)
 
     void set_status(ConnStatus s, const std::string &detail = "");
 
-    void push_job(TranslateJob job);
-    bool pop_job(TranslateJob &job); // false once the session is stopping
+    bool pop_job(const std::shared_ptr<ix::HttpRequestArgs> &args,
+                 TranslationJobPtr &job, std::string &key);
+    void apply_effects_locked(const CaptionPipelineResult &result);
+    CaptionPipelineResult reset_pipeline_locked(bool invalidate_socket);
+    void invalidate_connection(uint64_t epoch);
+    static void log_events(const CaptionPipelineResult &result);
 
     // Renders the composer window and hands it to caption_sink_ when it
     // changed. Never calls the sink while holding out_mtx_.
@@ -106,7 +105,7 @@ private:
     // The text handed to the sink is wrap_tail()'d to the configured
     // max_width x max_lines box, so the newest words stay visible (spec 002
     // §4.4, criterion 9). The coalescing buffer keeps the raw text.
-    void publish_source_text(const std::string &text, bool force);
+    void publish_source_text(const std::string &text, bool force, uint64_t epoch);
     void flush_pending_source(); // sends a coalesced interim once its window elapsed
     // Blanks the source-transcript source once nothing was published to it for
     // hold_ms, mirroring the composer's hold timeout for the caption source.
@@ -130,8 +129,7 @@ private:
     void announce_pause(PauseReason reason);
     void log_idle_diagnostics(int level, bool reset_window = false);
 
-    // Current text-box limits. Takes cfg_mtx_ only: the lock order is cfg_mtx_
-    // first, then out_mtx_, and the two are never held at the same time.
+    // Reads configuration under the pipeline state lock.
     void box_config(int &max_lines, int &max_width, uint64_t *hold_ms = nullptr);
 
     // Proactive reconnect before the Live API's 10-minute session cap.
@@ -148,7 +146,7 @@ private:
 
     ByteRingBuffer input_{16000 * 2 * 5};
 
-    std::mutex cfg_mtx_;
+    std::mutex lifecycle_mtx_;
     CaptionConfig cfg_;
 
     // Audio feeds and worker polls share one detector under idle_mtx_. No cached
@@ -169,14 +167,22 @@ private:
     bool output_was_blocked_ = false;
     uint64_t last_diagnostic_ms_ = 0;
 
-    // Guards the composer plus the sinks and the interim coalescing state.
+    // One state lock: configuration, pipeline, active requests, sinks and source state.
     // Sinks are always invoked after this mutex is released.
     std::mutex out_mtx_;
     // Serializes sink invocations across the WebSocket and translate workers so
-    // two concurrent renders cannot reach the text source out of order. Never
-    // held together with out_mtx_.
+    // two concurrent renders cannot reach the text source out of order.
+    // Lock order is publish_mtx_ -> out_mtx_; release out_mtx_ before every sink call.
     std::mutex publish_mtx_;
-    CaptionComposer composer_;
+    CaptionPipeline pipeline_;
+    CaptionPublicationGate publication_gate_;
+    uint64_t generation_ = 0;
+    uint64_t socket_epoch_ = 1;
+    struct ActiveRequest {
+        TranslationJobId id;
+        std::shared_ptr<ix::HttpRequestArgs> args;
+    };
+    std::vector<ActiveRequest> active_requests_;
     TextSink caption_sink_;
     TextSink source_sink_;
     std::string pending_interim_;
@@ -184,16 +190,13 @@ private:
     bool source_shown_ = false; // the source sink currently displays text
     uint64_t last_source_publish_ms_ = 0;
 
-    std::mutex job_mtx_;
     std::condition_variable job_cv_;
-    std::deque<TranslateJob> jobs_;
 
     std::atomic<bool> running_{false};
     std::atomic<bool> config_changed_{false};
     std::atomic<bool> output_active_{false}; // set_output_active()
     std::atomic<bool> interim_pending_{false}; // an interim is not yet finalized
     std::atomic<uint64_t> last_interim_ms_{0};
-    std::atomic<uint64_t> next_seq_{0};
 
     std::thread ws_thread_;
     std::vector<std::thread> translate_threads_;

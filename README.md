@@ -56,16 +56,18 @@ speech-only releases of the original project remain at
 Windows is the tested platform; see the note under *Install*. Current behavior:
 
 - ✅ **Live captions**: speech-to-text with `gemini-3.5-transcribe-live`,
-  per-sentence translation with a selectable Flash-Lite model, written into an
+  segmented translation with a selectable Flash-Lite model, written into an
   OBS text source (plus an optional source-transcript text source). In-order
-  display, per-sentence failure isolation, hold-to-clear, automatic reconnect
+  display, SMART-revision replacement, per-segment failure isolation,
+  hold-to-clear, automatic reconnect
   before the Live API's 10-minute session cap. See
   [`docs/specs/001-caption-translation-pipeline.md`](docs/specs/001-caption-translation-pipeline.md).
-- ✅ **Caption text box limits**: sentences are wrapped to a configurable width
-  (CJK-aware) and line count so the text source never overflows; over-long
-  sentences are cut with `…` and logged; the translation prompt is asked to stay
-  within the box. See
-  [`docs/specs/002-caption-text-box-limits.md`](docs/specs/002-caption-text-box-limits.md).
+- ✅ **Segmented and paged captions**: stable parts of a long utterance can be
+  translated before finalization. Results are wrapped to a configurable
+  CJK-aware width and line count; each ordered page is appended to a rolling
+  recent-lines window instead of dropping overflow with `…`. Segments from one
+  finalized utterance share a line while they fit the configured width. See
+  [`docs/specs/005-caption-segments-and-versioning.md`](docs/specs/005-caption-segments-and-versioning.md).
 - ✅ **Custom vocabulary** biases recognition toward your proper nouns and is
   handed to the translator as a glossary; **Translation Model** is selectable.
 - ✅ Reconnect with exponential backoff; live API-key / target-language changes.
@@ -80,9 +82,9 @@ Windows is the tested platform; see the note under *Install*. Current behavior:
   runs a single STT stream, so adding the **filter to two different sources**
   is unsupported (both would feed the one session) — keep it on a single
   source.
-- ⚠️ Captions appear a moment after you finish a sentence: the transcriber
-  finalizes on a pause, then the translation round-trip (typically under
-  1.5 s) follows.
+- ⚠️ The 005 implementation and automated regression suite are complete; OBS
+  and live API validation of incremental display, SMART revisions and timing is
+  still pending.
 - ❌ The speech-to-speech output of the original project (the *Gemini
   Translated Audio* source, echo and playback-delay options) was removed. This
   plugin uses its own filter id and name, so it does not conflict with the
@@ -129,7 +131,7 @@ closed**:
    characters count as 2) define the text box the plugin wraps into — the
    defaults fit a 1920×1080 scene at font size 48, i.e. about 30 Hangul or 60
    Latin characters per line. **Caption Hold (seconds)** (1–30) sets how long
-   the last line stays; **Custom Vocabulary** takes comma-separated names or
+   the latest displayed page or successful visible update stays; **Custom Vocabulary** takes comma-separated names or
    terms to bias recognition and is also handed to the translator as a
    glossary of proper names: they are rendered the way the target language
    writes foreign names (transliterated, or kept in Latin script where that
@@ -138,12 +140,18 @@ closed**:
    `gemini-3.1-flash-lite`; the list is editable, so any model id your account
    can use works — an unknown id shows up as `translate failed: HTTP 404` in
    the log). Non-Lite models think longer by default, so expect more latency.
+   **Translate while speaking** is on by default and translates stable parts of
+   an utterance before finalization. SMART transcription can revise earlier
+   words, so a visible caption may update. Turn it off to translate finalized
+   text only while keeping segmentation, version checks and paging.
    On the text source itself leave *Word wrap* and
    *Use custom text extents* **off** (the plugin already wraps, and a second
    wrap would split lines twice) and set the horizontal alignment to center.
    Until a caption source is chosen the status reads *Set a caption text source
    to show captions*; a misspelled name shows *Caption text source "…" not
-   found*.
+   found*. Choose different sources for translated captions and the source
+   transcript. If both names are the same and non-empty, translated captions
+   take priority and source-transcript output is disabled.
 
 4. Auto-pause settings (all apply live, no reconnect):
    **Idle Timeout (seconds, 0 = never)** (0–1800, default 300) closes the STT
@@ -186,10 +194,11 @@ plugin support needed:
 | `api_key` | string | Gemini API key (rarely sent remotely; clearing it stops the session) |
 | `caption_text_source` | string | name of the text source that receives translated captions |
 | `caption_source_text_source` | string | optional text source for the source-language transcript; empty disables it |
+| `caption_incremental_translation` | bool | `true` (default) translates stable interim segments while speaking; `false` translates finalized text only while preserving segmentation, versioning and paging |
 | `caption_max_lines` | int | lines kept on screen, clamped to 1-6 |
 | `caption_max_chars_per_line` | int | line width in display units (CJK = 2), clamped to 10-120 |
 | `caption_max_segments` | int | legacy (pre-002): read as the line count only when `caption_max_lines` has never been set |
-| `caption_hold_seconds` | number | seconds after the last sentence before the caption source is cleared, clamped to 1-30 |
+| `caption_hold_seconds` | number | seconds after the latest displayed page or successful visible update before the caption source is cleared, clamped to 1-30 |
 | `caption_custom_vocabulary` | string | comma-separated phrases passed to the transcriber as custom vocabulary and to the translator as a glossary of proper names (transliterated, never translated into common words) |
 | `translate_model` | string | generateContent model id used for translation (default `gemini-3.1-flash-lite`); any id the account can access, e.g. `gemini-3.5-flash-lite`, `gemini-flash-lite-latest`; applies from the next sentence |
 | `idle_timeout_seconds` | int | silence (below the threshold) before the STT stream is paused, clamped to 0-1800; `0` = never pause on silence. Setting it to `0` while paused resumes immediately |
@@ -204,8 +213,14 @@ Notes:
 - Keep the request's default `overlay: true` (merge). With `overlay: false` OBS
   first resets the filter to defaults — and since `api_key` has no default, that
   **clears the key and stops translation**.
-- Changing `target_lang` or the vocabulary reconnects the STT session, so
-  expect a brief gap; the caption box, model and auto-pause settings apply live.
+- Changing `target_lang` or the recognition vocabulary reconnects the STT session,
+  so expect a brief gap. Changing `caption_incremental_translation` keeps the STT
+  connection and visible provisional caption, but invalidates current provisional
+  work that has not been displayed. The caption box, model and auto-pause settings
+  apply live.
+- If `caption_text_source` and `caption_source_text_source` are the same
+  non-empty name, translated captions take priority and source-transcript output
+  is disabled.
 - Keys of the removed speech-to-speech mode (`output_mode`, `echo_target`,
   `playback_delay`) are ignored if a client still sends them.
 - This is **set-only**. The runtime connection status (Connecting / Connected / Paused /
@@ -219,9 +234,11 @@ filter*. Add it to your microphone source. It resamples the mic to 16 kHz mono
 16-bit PCM, chunks it (100 ms / 3200-byte chunks) and streams it
 **continuously** — silence included, which the model uses to detect the end of
 an utterance — to `gemini-3.5-transcribe-live` (Live API speech-to-text, SMART
-mode) over a TLS WebSocket. Every finalized sentence is translated with the
-selected Flash-Lite model (generateContent, the previous three sentences as
-context) and written into an OBS **text source** you pick — so the subtitles
+mode) over a TLS WebSocket. Stable segments can be translated while you speak;
+final text is reconciled with them, and SMART corrections create newer segment
+versions that replace only still-active captions. Translation uses the selected
+Flash-Lite model (generateContent, the previous three segments as context) and
+is written into an OBS **text source** you pick — so the subtitles
 use whatever font, outline and position you set on that source. A second,
 optional text source can show the source-language transcript live (interim
 text while you speak, replaced by the final sentence).
@@ -236,8 +253,8 @@ above the threshold connects (about 1–2 s), and the last second before it is
 sent along, so the first words are not lost. To check that a key works, just
 say a word and watch the status turn *Connected*. Optionally the filter can also run **only while
 streaming, recording or the virtual camera is active** (*Paused (output
-inactive)* otherwise). Translation requests are only made for finalized
-sentences, so a paused or silent session costs nothing on that side. See
+inactive)* otherwise). No translation request is made while paused or silent.
+See
 [`docs/specs/004-idle-pause-and-output-gating.md`](docs/specs/004-idle-pause-and-output-gating.md).
 
 ```
@@ -246,23 +263,30 @@ mic ─▶ [Gemini Translate Caption filter]
                                                           │ interim / final text
                                                           ▼
        [Source Transcript text source] ◀── (optional) ◀──┤
-                                                          │ final sentence
+                                                          │ stable / final segments
                                                           ▼
                                        generateContent ─▶ gemini-3.1-flash-lite
                                                           │ translation
                                                           ▼
-       [Caption text source] ◀── CaptionComposer (in-order, N lines, hold timer)
+       [Caption text source] ◀── CaptionPipeline (versioned, in-order pages)
 ```
 
-Translations are shown in the order the sentences were spoken even when the
-model answers out of order; a sentence whose translation fails is skipped
-(logged) without blocking the next one. The plugin wraps every sentence itself
+Translations are appended in spoken segment order even when the model answers
+out of order; a segment whose translation fails is skipped (logged) without
+blocking the next one. Segment and utterance boundaries are joined with spaces;
+explicit newlines in the text are preserved. The plugin wraps each segment itself
 to **Max Characters per Line** display units (CJK characters count as 2, so
-Korean/Japanese/Chinese lines hold half as many glyphs as Latin ones), keeps
-only the newest **Caption Lines** lines on screen, cuts a sentence that would
-not fit with `…`, and clears the source **Caption Hold** seconds after the last
-sentence — so the text source's box never grows past what you sized it for.
-The source transcript is wrapped the same way but keeps its *last* lines, so
+Korean/Japanese/Chinese lines hold half as many glyphs as Latin ones), shows
+long results as consecutive pages of at most **Caption Lines**, keeps the most
+recent translated lines as a rolling window, and clears that window after
+**Caption Hold** measured from the latest displayed page or successful visible
+update — so the text source's box never grows past what you sized it for.
+When the visible interim's utterance is finalized, its hold restarts before source
+reconciliation, including source corrections and segment merges. The current text
+stays visible until its replacement arrives or the hold expires. If a correction
+overlaps completed history ambiguously, the current text remains for its hold and
+the next utterance can proceed. Captions that have already expired are not shown again.
+The source transcript likewise keeps its *last* lines, so
 the newest words stay visible while you speak. A single shared `CaptionSession`
 owns the WebSocket (reconnect with backoff, proactive reconnect before the Live
 API's 10-minute cap) and three translation workers.
@@ -351,7 +375,8 @@ The `unit-tests` target covers the pure logic (base64, ring buffer, backoff,
 audio conversion, audio pacing/timestamper, Gemini protocol parsing, caption
 protocol, translate request/response, caption composer, caption wrapping) and does **not**
 require libobs. The caption modules also build as standalone binaries
-(`caption-protocol`, `translate-protocol`, `caption-composer`, `caption-wrap`; ctest names are
+(`caption-protocol`, `translate-protocol`, `caption-segmenter`,
+`translation-scheduler`, `caption-composer`, `caption-pipeline`, `caption-wrap`; ctest names are
 prefixed with `<module>/`) so one module can be iterated on without compiling
 the rest.
 
@@ -362,11 +387,14 @@ src/
   plugin-main.cpp        module entry; registers the filter
   filter.cpp             mic filter: resample → chunk → feed the caption session
   caption-session.*      STT WebSocket + translate workers + text sinks + reconnect + auto-pause
+  caption-pipeline.*     segment/version reducer, bounded scheduling and display effects
+  caption-segmenter.*    stable interim/final segmentation and SMART revision reconciliation
+  translation-scheduler.* bounded version-aware translation work queue
   pause-policy.*         idle detection (dBFS threshold + timeout) and pause reason (pure logic)
   output-state.*         streaming / recording / virtual-camera state via obs-frontend-api
   caption-protocol.*     build/parse gemini-3.5-transcribe-live messages + audio frames
   translate-protocol.*   Flash-Lite generateContent request/response
-  caption-composer.*     in-order line window, truncation + hold timer (pure logic)
+  caption-composer.*     in-order rolling page window, replacement + hold timer (pure logic)
   caption-wrap.*         display-width (CJK = 2) line wrapping (pure logic)
   caption-output.*       writes caption text into an OBS text source by name
   audio-convert.*        PCM downmix / conversion / chunking

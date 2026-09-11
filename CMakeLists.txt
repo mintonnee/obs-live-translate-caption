@@ -56,6 +56,14 @@ add_library(${CMAKE_PROJECT_NAME} MODULE
   src/pause-policy.cpp
   src/output-state.cpp
 )
+# Spec 005 slices arrive independently. Watch only their explicit paths so a
+# subsequent build reconfigures when a new implementation is created.
+file(GLOB caption_segment_sources CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/caption-segmenter.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/translation-scheduler.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/caption-pipeline.cpp"
+)
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/caption-segment.hpp ${caption_segment_sources})
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE
   OBS::libobs
   OBS::obs-frontend-api

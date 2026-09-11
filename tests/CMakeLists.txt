@@ -68,3 +68,42 @@ add_module_test(pause-policy
 add_module_test(ring-buffer
   ${CMAKE_SOURCE_DIR}/src/ring-buffer.cpp
 )
+
+# Watch planned files even while absent; never create a test executable until
+# its test and every implementation dependency exist (spec 005 S0 / §5).
+file(GLOB caption_segment_tests CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/test-caption-segmenter.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/test-translation-scheduler.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/test-caption-pipeline.cpp"
+)
+target_sources(unit-tests PRIVATE ${caption_segment_sources})
+
+function(add_caption_segment_test name)
+  set(test_file "${CMAKE_CURRENT_SOURCE_DIR}/test-${name}.cpp")
+  if(NOT EXISTS "${test_file}")
+    return()
+  endif()
+  foreach(source IN LISTS ARGN)
+    if(NOT EXISTS "${source}")
+      return()
+    endif()
+  endforeach()
+  add_module_test(${name} ${ARGN})
+  target_sources(unit-tests PRIVATE "${test_file}")
+endfunction()
+
+add_caption_segment_test(caption-segmenter
+  ${CMAKE_SOURCE_DIR}/src/caption-segmenter.cpp
+  ${CMAKE_SOURCE_DIR}/src/caption-wrap.cpp
+)
+add_caption_segment_test(translation-scheduler
+  ${CMAKE_SOURCE_DIR}/src/translation-scheduler.cpp
+)
+add_caption_segment_test(caption-pipeline
+  ${CMAKE_SOURCE_DIR}/src/caption-pipeline.cpp
+  ${CMAKE_SOURCE_DIR}/src/caption-segmenter.cpp
+  ${CMAKE_SOURCE_DIR}/src/translation-scheduler.cpp
+  ${CMAKE_SOURCE_DIR}/src/caption-composer.cpp
+  ${CMAKE_SOURCE_DIR}/src/caption-wrap.cpp
+  ${CMAKE_SOURCE_DIR}/src/translate-protocol.cpp
+)
