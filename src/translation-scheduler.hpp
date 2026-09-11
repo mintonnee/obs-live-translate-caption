@@ -20,7 +20,11 @@ enum class SchedulerRejectReason {
     TranslationLimit,
     InvalidUtf8,
     EmptyText,
-    DisplayConflict
+    DisplayConflict,
+    NotVisible,
+    InsufficientLifetime,
+    QualityDisabled,
+    QualityQueueFull
 };
 
 struct SchedulerRetirement {
@@ -28,11 +32,17 @@ struct SchedulerRetirement {
     CaptionRetireReason reason = CaptionRetireReason::None;
 };
 
+struct QualityRetryDrop {
+    TranslationJobId id;
+    QualityRetryOutcome outcome = QualityRetryOutcome::Expired;
+};
+
 // Per-transition effects, never a retained/unbounded event queue. Apply retirements
 // to the composer under the caller's state lock; issue cancellations outside it.
 struct SchedulerEffects {
     std::vector<SchedulerRetirement> retired;
     std::vector<TranslationJobId> cancel;
+    std::vector<QualityRetryDrop> quality_drops;
 };
 
 struct SchedulerResult {
@@ -59,6 +69,16 @@ struct ScheduledSegment {
     uint64_t first_registered_ms = 0;
     bool result_processed = false;
     std::string translated_text;
+    QualityVerdict quality_verdict = QualityVerdict::Indeterminate;
+    QualitySuspectReason quality_reason = QualitySuspectReason::None;
+    uint64_t quality_detect_us = 0;
+    bool similarity_computed = false;
+    double similarity = 0.0;
+    bool quality_retry_consumed = false;
+    bool quality_suspected_pending = false;
+    uint64_t quality_page_publication = 0;
+    size_t quality_page_index = 0;
+    uint64_t quality_expires_ms = 0;
 };
 
 // Pure, thread-unsafe reducer. Serialize every call with the session state lock.
@@ -86,15 +106,24 @@ public:
                                      const TranslationSettingsSnapshot &settings);
     SchedulerResult register_segment(const CaptionSegment &segment,
                                      const std::vector<std::string> &context, uint64_t now_ms);
-    // Explicit 006 extension point, one attempt 2 per revision; never automatic.
+    // One attempt 2 per revision. Callers must pass a currently visible segment.
     SchedulerResult request_quality_retry(const SegmentKey &key,
                                           const std::vector<std::string> &context,
-                                          uint64_t now_ms);
+                                          uint64_t now_ms,
+                                          QualitySuspectReason reason = QualitySuspectReason::None,
+                                          uint64_t page_publication = 0, size_t page_index = 0,
+                                          uint64_t expires_ms = 0);
     SchedulerDispatch dispatch(uint64_t now_ms);
     SchedulerCompletionResult complete(const TranslationCompletion &completion, uint64_t now_ms);
     SchedulerResult mark_visible(const SegmentKey &key, uint64_t now_ms);
     SchedulerResult retire(const SegmentKey &key, CaptionRetireReason reason);
     SchedulerEffects tick(uint64_t now_ms);
+    // No generation change: drop queued retries and ignore later in-flight display.
+    SchedulerResult set_quality_retry(bool enabled, uint64_t now_ms);
+    void set_quality_judgement(const SegmentKey &key, const QualityJudgement &judgement,
+                               bool eligible_for_retry);
+    void note_display_page(const SegmentKey &key, uint64_t publication, size_t page_index,
+                           uint64_t expires_ms, uint64_t now_ms, SchedulerEffects &effects);
     // Only after caller has finished final reconciliation for this metadata.
     bool forget_retired(const SegmentKey &key);
 
@@ -104,7 +133,11 @@ public:
     size_t in_flight_count() const { return running_.size(); }
     size_t managed_count() const { return segments_.size(); }
     size_t waiting_count() const;
+    size_t quality_queued_count() const;
+    size_t quality_in_flight_count() const;
+    bool quality_retry_enabled() const { return quality_retry_enabled_; }
     uint64_t generation() const { return generation_; }
+    const TranslationSettingsSnapshot &translation_settings() const { return settings_; }
 
 private:
     struct Running {
@@ -117,12 +150,22 @@ private:
     void cancel_running(const SegmentKey &key, SchedulerEffects &effects);
     void enqueue(ScheduledSegment &segment, TranslationRequestKind kind,
                  const std::vector<std::string> &context, uint64_t now_ms,
-                 SchedulerEffects &effects);
+                 SchedulerEffects &effects, QualitySuspectReason quality = QualitySuspectReason::None);
     void enforce_limits(SchedulerEffects &effects);
+    void reset_quality_state(ScheduledSegment &segment);
+    void drop_quality_job(const TranslationJobPtr &job, QualityRetryOutcome outcome,
+                          SchedulerEffects &effects);
+    void drop_quality_for_segment(const SegmentKey &key, QualityRetryOutcome outcome,
+                                  SchedulerEffects &effects);
+    void expire_quality_retries(uint64_t now_ms, SchedulerEffects &effects);
+    bool quality_remaining_ok(const ScheduledSegment &segment, uint64_t now_ms) const;
+    bool is_quality_job(const TranslationJobPtr &job) const;
+    bool is_quality_id(const TranslationJobId &id) const;
     ScheduledSegment *oldest_waiting();
     uint64_t generation_ = 0;
     uint64_t segment_high_water_ = 0;
     bool last_dispatch_was_update_ = false;
+    bool quality_retry_enabled_ = true;
     TranslationSettingsSnapshot settings_;
     std::vector<ScheduledSegment> segments_;
     std::vector<TranslationJobPtr> queued_;

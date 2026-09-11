@@ -7,48 +7,60 @@ namespace lt {
 
 namespace {
 
-// Kept short: every token here is paid and read on every sentence, and a
-// longer instruction measurably raised Flash-Lite latency. Order still
-// matters for a minimal-thinking model: the glossary comes first, framed as
-// "names to write as loanwords", and the instruction ends with the target
-// language so the last thing the model reads is "answer in <target>". A
-// verbatim-spelling rule at the end made it return whole Korean sentences
-// untranslated when the glossary held Korean names.
+std::string target_label(const TranslateRequest &req)
+{
+    return req.target_name + " (" + req.target_code + ")";
+}
+
+void append_stt_names(std::string &s, const TranslateRequest &req)
+{
+    bool first = true;
+    for (const auto &term : req.glossary) {
+        if (term.empty()) continue;
+        if (first) {
+            // Same list the transcriber was biased toward. Names, not a
+            // verbatim-source preservation rule (that leaked whole Korean
+            // sentences when the list held Hangul names).
+            s += " Glossary (proper names): ";
+            first = false;
+        } else {
+            s += ", ";
+        }
+        s += "\"";
+        s += term;
+        s += "\"";
+    }
+    if (first) return;
+    s += ". Render names naturally in the target language.";
+}
+
+// Keep every request short; local quality checks handle suspected source copies.
+// All languages share this instruction, without language-specific examples.
+void append_common_instruction(std::string &s, const std::string &target)
+{
+    s += "You Live-subtitle translator. Translate the entire \"Translate:\" text into ";
+    s += target;
+    s += ", even if it starts with English words or digits. Output only the translation: "
+         "no quotes, no explanations. \"Context:\" is reference only. Preserve meaning; "
+         "do not complete unfinished speech.";
+}
+
+void append_retry_instruction(std::string &s, const TranslateRequest &req,
+                              const std::string &target)
+{
+    if (req.retry_reason == QualitySuspectReason::None) return;
+    s += " Retranslate the source into ";
+    s += target;
+    s += "; output only the corrected translation.";
+}
+
 std::string build_system_instruction(const TranslateRequest &req)
 {
-    const std::string target = req.target_name + " (" + req.target_code + ")";
+    const std::string target = target_label(req);
     std::string s;
-    s += "Live-subtitle translator into ";
-    s += target;
-    s += ".";
-    if (!req.glossary.empty()) {
-        // Same list the transcriber was biased toward, so STT and translation
-        // agree on which words are names.
-        s += " Glossary (proper names): ";
-        bool first = true;
-        for (const auto &term : req.glossary) {
-            if (term.empty()) continue;
-            if (!first) s += ", ";
-            s += "\"";
-            s += term;
-            s += "\"";
-            first = false;
-        }
-        s += ". Write them as a ";
-        s += target;
-        s += " speaker writes a foreign name (transliterated, or Latin spelling "
-             "if usual); never translate them into common words. Translate "
-             "everything else.";
-    }
-    s += " Translate the \"Translate:\" text; \"Context:\" is earlier dialogue, "
-         "reference only. Output only the translation: no quotes, no "
-         "explanations, do not echo the source. Short, subtitle style. Only if "
-         "the whole input is already in ";
-    s += target;
-    s += ", return it as-is with punctuation fixed.";
-    s += " Always answer in ";
-    s += target;
-    s += ".";
+    append_common_instruction(s, target);
+    append_stt_names(s, req);
+    append_retry_instruction(s, req, target);
     return s;
 }
 
@@ -145,9 +157,15 @@ TranslateResult parse_translate_response(const std::string &json_text)
     }
 
     const auto &candidate0 = j["candidates"][0];
-    if (!candidate0.is_object() || !candidate0.contains("content") ||
-        !candidate0["content"].is_object() || !candidate0["content"].contains("parts") ||
-        !candidate0["content"]["parts"].is_array()) {
+    if (!candidate0.is_object()) {
+        r.failure = TranslationFailure::Empty;
+        r.error = "no candidates";
+        return r;
+    }
+    if (candidate0.contains("finishReason") && candidate0["finishReason"].is_string())
+        r.finish_reason = candidate0["finishReason"].get<std::string>();
+    if (!candidate0.contains("content") || !candidate0["content"].is_object() ||
+        !candidate0["content"].contains("parts") || !candidate0["content"]["parts"].is_array()) {
         r.failure = TranslationFailure::Empty;
         r.error = "no candidates";
         return r;

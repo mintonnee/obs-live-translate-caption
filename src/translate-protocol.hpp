@@ -23,7 +23,7 @@ std::string translate_endpoint_url(std::string_view model = kTranslateModel);
 
 struct TranslateRequest {
     std::string target_code; // BCP-47, e.g. "ja"
-    std::string target_name; // English name, e.g. "Japanese"
+    std::string target_name; // Native name, e.g. "日本語"; unknown code falls back to itself.
     // Previously finalized source segments, oldest first, at most 3. Included as
     // context only; the model must translate only `text`.
     std::vector<std::string> context;
@@ -32,17 +32,15 @@ struct TranslateRequest {
     // enforces the display box, so this value is intentionally ignored.
     int max_chars = 0;
     // Proper nouns / terms the transcriber was biased toward (the filter's
-    // custom vocabulary). When non-empty, the system instruction lists them as
-    // a glossary: keep their spelling as given, never translate them into
-    // common words. Empty = no glossary sentence.
+    // custom vocabulary). Listed as names; never force source spelling.
     std::vector<std::string> glossary;
+    QualitySuspectReason retry_reason = QualitySuspectReason::None;
 };
 
 // Builds the JSON body:
-//   system_instruction.parts[0].text : live-subtitle translator instruction that
-//       names "<target_name> (<target_code>)", demands translation-only output
-//       (no quotes/explanations/source echo), and says input already in the
-//       target language is returned cleaned up as-is.
+//   system_instruction.parts[0].text : short common instruction naming the
+//       target language + optional STT names + a short
+//       common correction sentence on retry. No language-specific rules or examples.
 //   contents : exactly one entry, role "user", whose text carries an optional
 //       "Context:" block (one line per context segment) followed by a
 //       "Translate:" block with `text`.
@@ -57,6 +55,7 @@ struct TranslateResult {
     TranslationFailure failure = TranslationFailure::Parse;
     std::string text;  // trimmed concatenation of candidates[0].content.parts[*].text
     std::string error; // reason when !ok (API error message, "no candidates", "parse error", ...)
+    std::string finish_reason; // candidates[0].finishReason when present
 };
 
 // Feed HTTP chunks directly here (disable the transport's body accumulation).

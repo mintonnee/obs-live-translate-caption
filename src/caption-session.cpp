@@ -51,6 +51,7 @@ CaptionPipelineConfig pipeline_config(const CaptionConfig &cfg)
     const double hold = std::isfinite(cfg.hold_seconds) ? cfg.hold_seconds : 4.0;
     result.display.hold_ms = static_cast<uint64_t>(std::clamp(hold * 1000.0, 1000.0, 30000.0));
     result.incremental = cfg.incremental;
+    result.quality_retry = cfg.quality_retry;
     return result;
 }
 
@@ -139,16 +140,21 @@ void CaptionSession::configure(const CaptionConfig &cfg)
         const bool semantic = reconnect || cfg_.translate_model != cfg.translate_model ||
             cfg_.translation_vocabulary != cfg.translation_vocabulary;
         const bool incremental_changed = cfg_.incremental != cfg.incremental;
+        const bool quality_retry_changed = cfg_.quality_retry != cfg.quality_retry;
         cfg_ = cfg;
         if (start || semantic) {
             changes = reset_pipeline_locked(start || reconnect);
-        } else if (incremental_changed) {
-            changes = pipeline_.set_incremental(cfg.incremental, now_ms());
+        } else {
+            if (incremental_changed)
+                changes = pipeline_.set_incremental(cfg.incremental, now_ms());
+            if (quality_retry_changed) {
+                auto quality = pipeline_.set_quality_retry(cfg.quality_retry, now_ms());
+                changes.cancel.insert(changes.cancel.end(), quality.cancel.begin(), quality.cancel.end());
+                changes.events.insert(changes.events.end(), quality.events.begin(), quality.events.end());
+            }
             auto display = pipeline_.set_display_config(pipeline_config(cfg).display, now_ms());
             changes.cancel.insert(changes.cancel.end(), display.cancel.begin(), display.cancel.end());
             changes.events.insert(changes.events.end(), display.events.begin(), display.events.end());
-        } else {
-            changes = pipeline_.set_display_config(pipeline_config(cfg).display, now_ms());
         }
         apply_effects_locked(changes);
         if (reconnect) config_changed_ = true;
@@ -263,7 +269,9 @@ void CaptionSession::log_events(const CaptionPipelineResult &result)
              "[live-translate] caption event=%d gen=%llu utterance=%llu segment=%llu "
              "revision=%llu attempt=%llu request_kind=%d reason=%d reject=%d compose_reject=%d "
              "failure=%d segment_wait_ms=%llu queue_wait_ms=%llu http_ms=%llu "
-             "display_wait_ms=%llu first_seen_to_display_ms=%llu queue_depth=%zu count=%zu",
+             "display_wait_ms=%llu first_seen_to_display_ms=%llu queue_depth=%zu count=%zu "
+             "quality_reason=%d quality_verdict=%d retry_outcome=%d detect_us=%llu "
+             "retry_queue_ms=%llu retry_http_ms=%llu similarity_computed=%d similarity=%g",
              static_cast<int>(event.kind), static_cast<unsigned long long>(event.id.segment.generation),
              static_cast<unsigned long long>(event.id.segment.utterance_id),
              static_cast<unsigned long long>(event.id.segment.segment_id),
@@ -276,7 +284,13 @@ void CaptionSession::log_events(const CaptionPipelineResult &result)
              static_cast<unsigned long long>(event.http_ms),
              static_cast<unsigned long long>(event.display_wait_ms),
              static_cast<unsigned long long>(event.first_seen_to_display_ms),
-             event.queue_depth, event.count);
+             event.queue_depth, event.count, static_cast<int>(event.quality_reason),
+             static_cast<int>(event.quality_verdict),
+             event.retry_outcome ? static_cast<int>(*event.retry_outcome) : -1,
+             static_cast<unsigned long long>(event.detect_us),
+             static_cast<unsigned long long>(event.retry_queue_ms),
+             static_cast<unsigned long long>(event.retry_http_ms),
+             event.similarity_computed ? 1 : 0, event.similarity);
     }
 }
 
@@ -828,6 +842,7 @@ void CaptionSession::translate_worker()
             request.target_code = job->settings.target_code;
             request.target_name = job->settings.target_name;
             request.glossary = job->settings.glossary;
+            request.retry_reason = job->quality_reason;
             request.context = job->context;
             request.text = job->source_text;
             const auto url = translate_endpoint_url(job->settings.model);
@@ -857,6 +872,7 @@ void CaptionSession::translate_worker()
                 else {
                     const auto parsed = parse_translate_response(response.body());
                     completion.failure = parsed.failure;
+                    completion.finish_reason = parsed.finish_reason;
                     if (parsed.ok) {
                         completion.outcome = TranslationOutcome::Success;
                         completion.translated_text = parsed.text;

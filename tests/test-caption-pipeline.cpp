@@ -19,10 +19,19 @@ struct Fixture {
         return job;
     }
     CaptionPipelineResult finish(const TranslationJobPtr &job, const std::string &text,
-                                 TranslationFailure failure = TranslationFailure::None) {
-        return pipeline.complete({job->id, failure == TranslationFailure::None
-            ? TranslationOutcome::Success : TranslationOutcome::Failed, failure, text, 0, now}, now);
+                                 TranslationFailure failure = TranslationFailure::None,
+                                 const std::string &finish_reason = {}) {
+        TranslationCompletion completion{job->id, failure == TranslationFailure::None
+            ? TranslationOutcome::Success : TranslationOutcome::Failed, failure, text, 0, now};
+        completion.finish_reason = finish_reason;
+        return pipeline.complete(completion, now);
     }
+    void japanese() {
+        config.translation.target_code = "ja";
+        config.translation.target_name = "Japanese";
+        REQUIRE(pipeline.reset(generation() == 0 ? 1 : generation() + 1, config, now).accepted);
+    }
+    uint64_t generation() const { return pipeline.generation(); }
     std::string frame() { return pipeline.tick(now).snapshot.text; }
     void stable(const std::string &prefix) {
         pipeline.interim(prefix + " a", now);
@@ -200,6 +209,7 @@ TEST_CASE("pipeline final only disables interim jobs not segmentation and pages"
 TEST_CASE("pipeline revision and retry barriers ignore stale and duplicate auth")
 {
     Fixture f;
+    f.japanese();
     f.stable("The original sentence.");
     auto old = f.send();
     f.pipeline.final("The revised sentence.", 900);
@@ -578,4 +588,220 @@ TEST_CASE("incremental disable does not retire finalized work from an earlier ut
     REQUIRE(f.pipeline.find(earlier->id.segment)->display == CaptionDisplayState::Waiting);
     REQUIRE(f.finish(earlier, "earlier").accepted);
     REQUIRE(f.frame() == "earlier");
+}
+
+namespace {
+const std::string kSourceCopy = "오늘 로블록스 할까요?";
+const std::string kFixedJa = "今日はRobloxをやりましょうか？";
+}
+
+TEST_CASE("pipeline first success displays immediately without waiting for quality retry")
+{
+    Fixture f;
+    f.japanese();
+    f.pipeline.final(kSourceCopy, 0);
+    auto first = f.send();
+    REQUIRE(f.finish(first, kSourceCopy).accepted);
+    REQUIRE(f.pipeline.queued_count() == 0);
+    REQUIRE(f.frame() == kSourceCopy);
+    REQUIRE(f.pipeline.find(first->id.segment)->quality_verdict == QualityVerdict::Suspected);
+    REQUIRE(f.pipeline.queued_count() == 1);
+    REQUIRE(f.pipeline.in_flight_count() == 0);
+    auto retry = f.send();
+    REQUIRE(retry->request_kind == TranslationRequestKind::QualityRetry);
+    REQUIRE(retry->id.attempt_id == 2);
+    REQUIRE(f.frame() == kSourceCopy);
+}
+
+TEST_CASE("pipeline quality retry stays queued behind three in-flight general jobs")
+{
+    Fixture f;
+    f.japanese();
+    f.pipeline.final(kSourceCopy, 0);
+    auto first = f.send();
+    f.finish(first, kSourceCopy);
+    REQUIRE(f.frame() == kSourceCopy);
+    f.pipeline.final("Alpha.", 0);
+    f.pipeline.final("Beta.", 0);
+    f.pipeline.final("Gamma.", 0);
+    auto a = f.send(), b = f.send(), c = f.send();
+    REQUIRE(a->request_kind != TranslationRequestKind::QualityRetry);
+    REQUIRE(b->request_kind != TranslationRequestKind::QualityRetry);
+    REQUIRE(c->request_kind != TranslationRequestKind::QualityRetry);
+    REQUIRE_FALSE(f.pipeline.dispatch(0).job);
+    REQUIRE(f.pipeline.in_flight_count() == 3);
+}
+
+TEST_CASE("pipeline retry HTTP failure keeps the visible caption and does not issue a third request")
+{
+    Fixture f;
+    f.japanese();
+    f.pipeline.final(kSourceCopy, 0);
+    auto first = f.send();
+    f.finish(first, kSourceCopy);
+    REQUIRE(f.frame() == kSourceCopy);
+    auto retry = f.send();
+    REQUIRE(retry->request_kind == TranslationRequestKind::QualityRetry);
+    REQUIRE(f.finish(retry, "", TranslationFailure::Http).accepted);
+    REQUIRE(f.frame() == kSourceCopy);
+    REQUIRE_FALSE(f.pipeline.dispatch(0).job);
+    REQUIRE(f.pipeline.queued_count() == 0);
+}
+
+TEST_CASE("pipeline retry that is still suspected or indeterminate keeps the visible caption")
+{
+    Fixture f;
+    f.japanese();
+    f.pipeline.final(kSourceCopy, 0);
+    auto first = f.send();
+    f.finish(first, kSourceCopy);
+    REQUIRE(f.frame() == kSourceCopy);
+    auto retry = f.send();
+    SECTION("still suspected") {
+        REQUIRE(f.finish(retry, kSourceCopy).accepted);
+        REQUIRE(f.frame() == kSourceCopy);
+    }
+    SECTION("hangul residue") {
+        REQUIRE(f.finish(retry, "今日は로블록스").accepted);
+        REQUIRE(f.frame() == kSourceCopy);
+    }
+    REQUIRE_FALSE(f.pipeline.dispatch(0).job);
+}
+
+TEST_CASE("pipeline retry Normal replaces the currently visible segment")
+{
+    Fixture f;
+    f.japanese();
+    f.pipeline.final(kSourceCopy, 0);
+    auto first = f.send();
+    f.finish(first, kSourceCopy);
+    REQUIRE(f.frame() == kSourceCopy);
+    auto retry = f.send();
+    REQUIRE(f.finish(retry, kFixedJa).accepted);
+    REQUIRE(f.frame() == kFixedJa);
+}
+
+TEST_CASE("pipeline page expiry discards a late quality retry without resurrection")
+{
+    Fixture f;
+    f.japanese();
+    f.pipeline.final(kSourceCopy, 0);
+    auto first = f.send();
+    f.finish(first, kSourceCopy);
+    REQUIRE(f.frame() == kSourceCopy);
+    auto retry = f.send();
+    f.now = 4000;
+    REQUIRE(f.frame().empty());
+    REQUIRE_FALSE(f.finish(retry, kFixedJa).accepted);
+    REQUIRE(f.frame().empty());
+}
+
+TEST_CASE("pipeline page change discards a quality retry for the previous page")
+{
+    Fixture f;
+    f.config.display = {2, 10, 4000};
+    f.japanese();
+    std::string long_copy;
+    for (int i = 0; i < 40; ++i) long_copy += "가";
+    f.pipeline.final(long_copy, 0);
+    auto first = f.send();
+    f.finish(first, long_copy);
+    REQUIRE_FALSE(f.frame().empty());
+    const auto page0 = f.pipeline.snapshot().display.page_index;
+    auto retry = f.send();
+    f.now = 1200;
+    REQUIRE_FALSE(f.frame().empty());
+    REQUIRE(f.pipeline.snapshot().display.page_index != page0);
+    REQUIRE(f.finish(retry, kFixedJa).accepted);
+    REQUIRE(f.pipeline.snapshot().text.find(kFixedJa) == std::string::npos);
+}
+
+TEST_CASE("pipeline SMART source revision invalidates attempt two and starts attempt one")
+{
+    Fixture f;
+    f.japanese();
+    f.stable("오늘 로블록스 할까요.");
+    auto first = f.send();
+    REQUIRE(f.finish(first, first->source_text).accepted);
+    REQUIRE_FALSE(f.frame().empty());
+    auto retry = f.send();
+    REQUIRE(retry->id.attempt_id == 2);
+    f.now = 900;
+    f.pipeline.final("오늘 로블록스 할까요 지금.", f.now);
+    auto revision = f.send();
+    REQUIRE(revision->id.segment == first->id.segment);
+    REQUIRE(revision->id.source_revision == 2);
+    REQUIRE(revision->id.attempt_id == 1);
+    REQUIRE_FALSE(f.finish(retry, kFixedJa).accepted);
+    REQUIRE(f.finish(revision, kFixedJa).accepted);
+    REQUIRE(f.frame() == kFixedJa);
+}
+
+TEST_CASE("pipeline quality retry disable blocks reservation and in-flight apply without generation bump")
+{
+    Fixture f;
+    f.japanese();
+    const auto generation = f.pipeline.generation();
+    SECTION("no new reservation") {
+        REQUIRE(f.pipeline.set_quality_retry(false, 0).accepted);
+        f.pipeline.final(kSourceCopy, 0);
+        auto first = f.send();
+        f.finish(first, kSourceCopy);
+        REQUIRE(f.frame() == kSourceCopy);
+        REQUIRE_FALSE(f.pipeline.dispatch(0).job);
+        REQUIRE(f.pipeline.generation() == generation);
+    }
+    SECTION("in-flight result is not applied") {
+        f.pipeline.final(kSourceCopy, 0);
+        auto first = f.send();
+        f.finish(first, kSourceCopy);
+        REQUIRE(f.frame() == kSourceCopy);
+        auto retry = f.send();
+        REQUIRE(f.pipeline.set_quality_retry(false, 0).accepted);
+        REQUIRE(f.pipeline.generation() == generation);
+        REQUIRE(f.finish(retry, kFixedJa).accepted);
+        REQUIRE(f.frame() == kSourceCopy);
+    }
+}
+
+TEST_CASE("pipeline quality retry off then on does not revive a consumed budget")
+{
+    Fixture f;
+    f.japanese();
+    f.pipeline.final(kSourceCopy, 0);
+    auto first = f.send();
+    f.finish(first, kSourceCopy);
+    REQUIRE(f.frame() == kSourceCopy);
+    REQUIRE(f.pipeline.queued_count() == 1);
+    REQUIRE(f.pipeline.set_quality_retry(false, 0).accepted);
+    REQUIRE(f.pipeline.queued_count() == 0);
+    REQUIRE(f.pipeline.set_quality_retry(true, 0).accepted);
+    REQUIRE_FALSE(f.pipeline.dispatch(0).job);
+    REQUIRE(f.pipeline.find(first->id.segment)->quality_retry_consumed);
+}
+
+TEST_CASE("pipeline MAX_TOKENS is displayed but does not create a quality retry")
+{
+    Fixture f;
+    f.japanese();
+    f.pipeline.final(kSourceCopy, 0);
+    auto first = f.send();
+    REQUIRE(f.finish(first, kSourceCopy, TranslationFailure::None, "MAX_TOKENS").accepted);
+    REQUIRE(f.frame() == kSourceCopy);
+    REQUIRE_FALSE(f.pipeline.dispatch(0).job);
+    REQUIRE_FALSE(f.pipeline.find(first->id.segment)->quality_suspected_pending);
+}
+
+TEST_CASE("pipeline current-generation quality retry auth failure is auth_error")
+{
+    Fixture f;
+    f.japanese();
+    f.pipeline.final(kSourceCopy, 0);
+    auto first = f.send();
+    f.finish(first, kSourceCopy);
+    REQUIRE(f.frame() == kSourceCopy);
+    auto retry = f.send();
+    auto result = f.finish(retry, "", TranslationFailure::Auth);
+    REQUIRE(result.auth_error);
+    REQUIRE(f.frame() == kSourceCopy);
 }

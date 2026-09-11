@@ -76,7 +76,7 @@ file(GLOB caption_segment_tests CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/test-translation-scheduler.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/test-caption-pipeline.cpp"
 )
-target_sources(unit-tests PRIVATE ${caption_segment_sources})
+target_sources(unit-tests PRIVATE ${caption_segment_sources} ${translation_quality_sources})
 
 function(add_caption_segment_test name)
   set(test_file "${CMAKE_CURRENT_SOURCE_DIR}/test-${name}.cpp")
@@ -106,4 +106,8 @@ add_caption_segment_test(caption-pipeline
   ${CMAKE_SOURCE_DIR}/src/caption-composer.cpp
   ${CMAKE_SOURCE_DIR}/src/caption-wrap.cpp
   ${CMAKE_SOURCE_DIR}/src/translate-protocol.cpp
+  ${CMAKE_SOURCE_DIR}/src/translation-quality.cpp
+)
+add_caption_segment_test(translation-quality
+  ${CMAKE_SOURCE_DIR}/src/translation-quality.cpp
 )

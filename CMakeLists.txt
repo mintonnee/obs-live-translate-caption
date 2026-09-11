@@ -63,7 +63,15 @@ file(GLOB caption_segment_sources CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/src/translation-scheduler.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/caption-pipeline.cpp"
 )
-target_sources(${CMAKE_PROJECT_NAME} PRIVATE src/caption-segment.hpp ${caption_segment_sources})
+file(GLOB translation_quality_sources CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/translation-quality.cpp"
+)
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+  src/caption-segment.hpp
+  src/translation-quality-types.hpp
+  ${caption_segment_sources}
+  ${translation_quality_sources}
+)
 target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE
   OBS::libobs
   OBS::obs-frontend-api

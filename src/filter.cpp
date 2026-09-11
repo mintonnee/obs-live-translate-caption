@@ -54,6 +54,7 @@ struct FilterData {
     int caption_max_width = kDefaultCaptionWidth;
     double caption_hold_seconds = 4.0;
     std::string caption_custom_vocabulary;
+    bool caption_quality_retry = true;
     std::string translate_model; // generateContent model id, "" = kTranslateModel
     int idle_timeout_seconds = kDefaultIdleTimeoutSeconds;
     double idle_threshold_dbfs = kDefaultIdleThresholdDbfs;
@@ -64,25 +65,6 @@ struct FilterData {
 const char *filter_get_name(void *)
 {
     return obs_module_text("FilterName");
-}
-
-// English name for the translation prompt: the display names in languages.hpp
-// are "<endonym> (<English name>)" for non-English languages and a plain
-// English name otherwise. Unknown codes fall back to the code itself.
-std::string target_language_name(const std::string &code)
-{
-    for (int i = 0; i < lt::kLanguagesCount; ++i) {
-        if (code != lt::kLanguages[i].code) continue;
-        std::string name = lt::kLanguages[i].name;
-        size_t close = name.rfind(')');
-        if (close != std::string::npos) {
-            size_t open = name.rfind('(', close);
-            if (open != std::string::npos && close > open + 1)
-                return name.substr(open + 1, close - open - 1);
-        }
-        return name;
-    }
-    return code;
 }
 
 // "foo, bar ,, baz" -> {"foo", "bar", "baz"}
@@ -110,8 +92,9 @@ lt::CaptionConfig make_caption_config(const FilterData *d)
     lt::CaptionConfig cfg;
     cfg.api_key = d->api_key;
     cfg.target_lang = d->target_lang;
-    cfg.target_name = target_language_name(d->target_lang);
+    cfg.target_name = lt::target_language_name(d->target_lang);
     cfg.custom_vocabulary = split_custom_vocabulary(d->caption_custom_vocabulary);
+    cfg.quality_retry = d->caption_quality_retry;
     cfg.translate_model = d->translate_model;
     cfg.incremental = d->caption_incremental_translation;
     cfg.max_lines = d->caption_max_lines;
@@ -264,6 +247,7 @@ void filter_update(void *data, obs_data_t *settings)
         obs_data_get_bool(settings, "caption_incremental_translation");
     d->caption_custom_vocabulary =
         obs_data_get_string(settings, "caption_custom_vocabulary");
+    d->caption_quality_retry = obs_data_get_bool(settings, "caption_quality_retry");
 
     bool run = !d->api_key.empty() && is_primary_filter(d);
     if (run) {
@@ -440,6 +424,8 @@ obs_properties_t *filter_properties(void *data)
         props, "caption_custom_vocabulary",
         obs_module_text("CustomVocabulary"), OBS_TEXT_DEFAULT);
     obs_properties_add_bool(
+        props, "caption_quality_retry", obs_module_text("QualityRetry"));
+    obs_properties_add_bool(
         props, "caption_incremental_translation",
         obs_module_text("IncrementalTranslation"));
     obs_properties_add_text(
@@ -490,6 +476,7 @@ void filter_defaults(obs_data_t *settings)
     // obs_data_has_user_value() to detect a stored legacy value.
     obs_data_set_default_double(settings, "caption_hold_seconds", 4.0);
     obs_data_set_default_string(settings, "caption_custom_vocabulary", "");
+    obs_data_set_default_bool(settings, "caption_quality_retry", true);
     obs_data_set_default_bool(settings, "caption_incremental_translation", true);
     obs_data_set_default_string(settings, "translate_model", lt::kTranslateModel);
     // Absent from scene collections written before spec 004; the defaults keep

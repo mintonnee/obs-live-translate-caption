@@ -1,4 +1,5 @@
 #pragma once
+#include <string>
 
 namespace lt {
 struct LangEntry {
@@ -99,4 +100,16 @@ static const LangEntry kLanguages[] = {
 };
 
 static const int kLanguagesCount = sizeof(kLanguages) / sizeof(kLanguages[0]);
+
+// The prompt uses the endonym before the UI's optional English annotation.
+// Keep regional codes intact; unknown codes still fall back to the code itself.
+inline std::string target_language_name(const std::string &code)
+{
+    for (const auto &language : kLanguages) {
+        if (code != language.code) continue;
+        const std::string name = language.name;
+        return name.substr(0, name.find(" ("));
+    }
+    return code;
+}
 }

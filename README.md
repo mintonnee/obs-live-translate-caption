@@ -68,8 +68,16 @@ Windows is the tested platform; see the note under *Install*. Current behavior:
   recent-lines window instead of dropping overflow with `…`. Segments from one
   finalized utterance share a line while they fit the configured width. See
   [`docs/specs/005-caption-segments-and-versioning.md`](docs/specs/005-caption-segments-and-versioning.md).
-- ✅ **Custom vocabulary** biases recognition toward your proper nouns and is
-  handed to the translator as a glossary; **Translation Model** is selectable.
+- ✅ **Custom vocabulary** biases STT recognition toward your proper nouns.
+  Translation uses a short common prompt
+  without Japanese-specific rules or built-in examples. Suspected leftover source
+  text can be retried once after the first caption is shown, without blocking that
+  first display. If correction fails, the current caption stays and processing
+  continues with subsequent captions. See
+  [`docs/specs/006-translation-quality-and-retry.md`](docs/specs/006-translation-quality-and-retry.md).
+  Unit tests pass; live model quality and OBS load comparison are not yet
+  measured.
+- ✅ **Translation Model** is selectable.
 - ✅ Reconnect with exponential backoff; live API-key / target-language changes.
 - ✅ **Auto-pause**: the STT stream is closed after a configurable silence
   timeout (default 5 min) and optionally whenever no stream / recording /
@@ -133,9 +141,8 @@ closed**:
    Latin characters per line. **Caption Hold (seconds)** (1–30) sets how long
    the latest displayed page or successful visible update stays; **Custom Vocabulary** takes comma-separated names or
    terms to bias recognition and is also handed to the translator as a
-   glossary of proper names: they are rendered the way the target language
-   writes foreign names (transliterated, or kept in Latin script where that
-   is the convention) instead of being translated into common words.
+   list of proper names with a short instruction to render them naturally
+   in the target language.
    **Translation Model** picks the generateContent model (default
    `gemini-3.1-flash-lite`; the list is editable, so any model id your account
    can use works — an unknown id shows up as `translate failed: HTTP 404` in
@@ -199,7 +206,8 @@ plugin support needed:
 | `caption_max_chars_per_line` | int | line width in display units (CJK = 2), clamped to 10-120 |
 | `caption_max_segments` | int | legacy (pre-002): read as the line count only when `caption_max_lines` has never been set |
 | `caption_hold_seconds` | number | seconds after the latest displayed page or successful visible update before the caption source is cleared, clamped to 1-30 |
-| `caption_custom_vocabulary` | string | comma-separated phrases passed to the transcriber as custom vocabulary and to the translator as a glossary of proper names (transliterated, never translated into common words) |
+| `caption_custom_vocabulary` | string | comma-separated phrases passed to the transcriber as custom vocabulary; listed to the translator as names, never as a keep-original-spelling rule |
+| `caption_quality_retry` | bool | `true` (default) retries a visible suspected-untranslated caption once; `false` stops new retries without clearing captions or changing generation |
 | `translate_model` | string | generateContent model id used for translation (default `gemini-3.1-flash-lite`); any id the account can access, e.g. `gemini-3.5-flash-lite`, `gemini-flash-lite-latest`; applies from the next sentence |
 | `idle_timeout_seconds` | int | silence (below the threshold) before the STT stream is paused, clamped to 0-1800; `0` = never pause on silence. Setting it to `0` while paused resumes immediately |
 | `idle_threshold_dbfs` | number | chunk RMS level that counts as sound, clamped to -90 to -20 (0 dBFS = full-scale 16-bit RMS) |
@@ -214,10 +222,13 @@ Notes:
   first resets the filter to defaults — and since `api_key` has no default, that
   **clears the key and stops translation**.
 - Changing `target_lang` or the recognition vocabulary reconnects the STT session,
-  so expect a brief gap. Changing `caption_incremental_translation` keeps the STT
-  connection and visible provisional caption, but invalidates current provisional
-  work that has not been displayed. The caption box, model and auto-pause settings
-  apply live.
+  so expect a brief gap. Changing `translate_model` starts a new translation
+  generation without reopening STT.
+  Changing `caption_quality_retry` cancels pending retries only; it does not
+  clear captions or bump generation. Changing `caption_incremental_translation`
+  keeps the STT connection and visible provisional caption, but invalidates
+  current provisional work that has not been displayed. The caption box and
+  auto-pause settings apply live.
 - If `caption_text_source` and `caption_source_text_source` are the same
   non-empty name, translated captions take priority and source-transcript output
   is disabled.
@@ -443,9 +454,10 @@ plus the English name (e.g. `日本語 (Japanese)`) so both native speakers and
 others can recognize it. Common languages — English, Chinese, Japanese, Korean,
 Spanish, French, German, Portuguese (BR), Italian, Russian, Indonesian, Thai,
 Vietnamese — are pinned to the top; the rest follow in English-name
-alphabetical order. The translation prompt names the language in English plus
-its BCP-47 code, so any language the translation model handles works; the list
-is inherited from the original project and can be extended in that file.
+alphabetical order. The translation prompt uses the native name plus its BCP-47
+code, such as `日本語 (ja)` or `Français (fr)`. Regional codes stay intact, and
+unlisted codes fall back to the code itself. The list is inherited from the
+original project and can be extended in that file.
 
 Chinese uses the script-less code **`zh`**; the translator writes Simplified
 Chinese by default. Ask for `zh-Hant` in the list if you need Traditional.

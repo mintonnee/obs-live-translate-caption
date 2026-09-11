@@ -9,12 +9,13 @@ struct CaptionPipelineConfig {
     TranslationSettingsSnapshot translation;
     CaptionComposerConfig display;
     bool incremental = true;
+    bool quality_retry = true;
 };
 
 enum class CaptionPipelineEventKind {
     Registered, Dispatched, Completed, Rejected, Retired, PageEntered, PageReplaced,
     RemainderDiscarded, SourceLimit, SegmentLimit, ReconcileAmbiguous, GenerationChanged,
-    IncrementalChanged
+    IncrementalChanged, QualityInspected, QualityRetryDropped, QualityRetryChanged
 };
 
 // Metadata only: safe to log without source, translation or transport credentials.
@@ -34,6 +35,14 @@ struct CaptionPipelineEvent {
     uint64_t first_seen_to_display_ms = 0;
     size_t count = 1;
     size_t queue_depth = 0;
+    QualitySuspectReason quality_reason = QualitySuspectReason::None;
+    QualityVerdict quality_verdict = QualityVerdict::Indeterminate;
+    std::optional<QualityRetryOutcome> retry_outcome;
+    uint64_t detect_us = 0;
+    uint64_t retry_queue_ms = 0;
+    uint64_t retry_http_ms = 0;
+    bool similarity_computed = false;
+    double similarity = 0.0;
 };
 
 struct CaptionPipelineResult {
@@ -63,6 +72,8 @@ public:
     CaptionPipelineResult set_display_config(const CaptionComposerConfig &config, uint64_t now_ms);
     // No generation change: disabling retires only unseen current provisional work.
     CaptionPipelineResult set_incremental(bool enabled, uint64_t now_ms);
+    // No generation change: cancels queued quality jobs and ignores in-flight retry display.
+    CaptionPipelineResult set_quality_retry(bool enabled, uint64_t now_ms);
     CaptionPipelineResult interim(std::string_view text, uint64_t now_ms);
     CaptionPipelineResult final(std::string_view text, uint64_t now_ms);
     CaptionPipelineDispatch dispatch(uint64_t now_ms);
@@ -93,6 +104,11 @@ private:
                         CaptionPipelineResult &result);
     void record_retire(const SegmentKey &key, CaptionRetireReason reason, uint64_t now_ms,
                        CaptionPipelineResult &result);
+    void record_quality_drops(const std::vector<QualityRetryDrop> &drops, uint64_t now_ms,
+                              CaptionPipelineResult &result);
+    void maybe_reserve_quality(const SegmentKey &key, uint64_t now_ms, CaptionPipelineResult &result);
+    QualityJudgement inspect_segment(const ScheduledSegment &state, std::string_view output) const;
+    void fill_quality_event(CaptionPipelineEvent &event, const ScheduledSegment *state) const;
     std::vector<std::string> context(const CaptionSegment &segment) const;
     void prune();
     CaptionSegmenter segmenter_;
@@ -102,6 +118,7 @@ private:
     uint64_t current_utterance_ = 0;
     bool finalized_ = false;
     bool incremental_ = true;
+    bool quality_retry_ = true;
 };
 
 // A sink adapter holds its publication mutex across claim + actual sink call.

@@ -88,6 +88,91 @@ void TranslationScheduler::cancel_running(const SegmentKey &key, SchedulerEffect
     }
 }
 
+bool TranslationScheduler::is_quality_job(const TranslationJobPtr &job) const
+{
+    return job && job->request_kind == TranslationRequestKind::QualityRetry;
+}
+
+bool TranslationScheduler::is_quality_id(const TranslationJobId &id) const
+{
+    return id.attempt_id > 1;
+}
+
+size_t TranslationScheduler::quality_queued_count() const
+{
+    return static_cast<size_t>(std::count_if(queued_.begin(), queued_.end(),
+                                             [&](const auto &job) { return is_quality_job(job); }));
+}
+
+size_t TranslationScheduler::quality_in_flight_count() const
+{
+    return static_cast<size_t>(std::count_if(running_.begin(), running_.end(),
+                                             [&](const auto &run) { return is_quality_id(run.id); }));
+}
+
+void TranslationScheduler::reset_quality_state(ScheduledSegment &segment)
+{
+    segment.quality_verdict = QualityVerdict::Indeterminate;
+    segment.quality_reason = QualitySuspectReason::None;
+    segment.quality_detect_us = 0;
+    segment.similarity_computed = false;
+    segment.similarity = 0.0;
+    segment.quality_retry_consumed = false;
+    segment.quality_suspected_pending = false;
+    segment.quality_page_publication = 0;
+    segment.quality_page_index = 0;
+    segment.quality_expires_ms = 0;
+}
+
+bool TranslationScheduler::quality_remaining_ok(const ScheduledSegment &segment, uint64_t now_ms) const
+{
+    if (segment.quality_expires_ms == 0) return true;
+    if (now_ms >= segment.quality_expires_ms) return false;
+    return segment.quality_expires_ms - now_ms >= kQualityMinRemainingMs;
+}
+
+void TranslationScheduler::drop_quality_job(const TranslationJobPtr &job, QualityRetryOutcome outcome,
+                                            SchedulerEffects &effects)
+{
+    if (!job) return;
+    effects.quality_drops.push_back({job->id, outcome});
+    if (auto *segment = find_mutable(job->id.segment)) {
+        segment->quality_retry_consumed = true;
+        segment->quality_suspected_pending = false;
+    }
+}
+
+void TranslationScheduler::drop_quality_for_segment(const SegmentKey &key, QualityRetryOutcome outcome,
+                                                    SchedulerEffects &effects)
+{
+    for (auto it = queued_.begin(); it != queued_.end();) {
+        if ((*it)->id.segment == key && is_quality_job(*it)) {
+            drop_quality_job(*it, outcome, effects);
+            it = queued_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void TranslationScheduler::expire_quality_retries(uint64_t now_ms, SchedulerEffects &effects)
+{
+    for (auto it = queued_.begin(); it != queued_.end();) {
+        if (!is_quality_job(*it)) {
+            ++it;
+            continue;
+        }
+        const auto *segment = find((*it)->id.segment);
+        if (!segment || segment->display == CaptionDisplayState::Retired ||
+            (segment->quality_expires_ms != 0 && now_ms >= segment->quality_expires_ms)) {
+            drop_quality_job(*it, QualityRetryOutcome::Expired, effects);
+            it = queued_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 void TranslationScheduler::retire_segment(ScheduledSegment &segment, CaptionRetireReason reason,
                                           SchedulerEffects &effects)
 {
@@ -96,9 +181,14 @@ void TranslationScheduler::retire_segment(ScheduledSegment &segment, CaptionReti
     segment.retire_reason = reason;
     std::string{}.swap(segment.translated_text);
     const auto key = segment.segment.key;
-    queued_.erase(std::remove_if(queued_.begin(), queued_.end(),
-                                 [&](const auto &job) { return job->id.segment == key; }),
-                  queued_.end());
+    for (auto it = queued_.begin(); it != queued_.end();) {
+        if ((*it)->id.segment != key) {
+            ++it;
+            continue;
+        }
+        if (is_quality_job(*it)) drop_quality_job(*it, QualityRetryOutcome::Superseded, effects);
+        it = queued_.erase(it);
+    }
     cancel_running(key, effects);
     effects.retired.push_back({key, reason});
 }
@@ -118,6 +208,7 @@ SchedulerResult TranslationScheduler::reset_generation(
     generation_ = generation;
     settings_ = settings;
     last_dispatch_was_update_ = false;
+    quality_retry_enabled_ = true;
     result.accepted = true;
     return result;
 }
@@ -131,6 +222,7 @@ SchedulerEffects TranslationScheduler::tick(uint64_t now_ms)
             now_ms - segment.first_registered_ms >= kStaleBeforeDisplayMs)
             retire_segment(segment, CaptionRetireReason::StaleBeforeDisplay, effects);
     }
+    expire_quality_retries(now_ms, effects);
     return effects;
 }
 
@@ -149,6 +241,13 @@ ScheduledSegment *TranslationScheduler::oldest_waiting()
 
 void TranslationScheduler::enforce_limits(SchedulerEffects &effects)
 {
+    while (queued_.size() > kMaxQueued) {
+        auto it = std::find_if(queued_.rbegin(), queued_.rend(),
+                               [&](const auto &job) { return is_quality_job(job); });
+        if (it == queued_.rend()) break;
+        drop_quality_job(*it, QualityRetryOutcome::QueueFull, effects);
+        queued_.erase(std::next(it).base());
+    }
     while (waiting_count() > kMaxWaiting || queued_.size() > kMaxQueued) {
         auto *oldest = oldest_waiting();
         if (!oldest) break; // Only one logical segment may be visible at a time.
@@ -160,17 +259,23 @@ void TranslationScheduler::enforce_limits(SchedulerEffects &effects)
 
 void TranslationScheduler::enqueue(ScheduledSegment &segment, TranslationRequestKind kind,
                                    const std::vector<std::string> &context, uint64_t now_ms,
-                                   SchedulerEffects &effects)
+                                   SchedulerEffects &effects, QualitySuspectReason quality)
 {
     const auto key = segment.segment.key;
-    queued_.erase(std::remove_if(queued_.begin(), queued_.end(),
-                                 [&](const auto &job) { return job->id.segment == key; }),
-                  queued_.end());
+    for (auto it = queued_.begin(); it != queued_.end();) {
+        if ((*it)->id.segment != key) {
+            ++it;
+            continue;
+        }
+        if (is_quality_job(*it) && kind != TranslationRequestKind::QualityRetry)
+            drop_quality_job(*it, QualityRetryOutcome::Superseded, effects);
+        it = queued_.erase(it);
+    }
     cancel_running(key, effects);
     queued_.push_back(std::make_shared<const TranslationJob>(
         segment.current_job, segment.segment.order_key, kind, segment.segment.source_text,
         bounded_context(context), settings_, segment.segment.first_seen_ms,
-        segment.first_registered_ms, now_ms));
+        segment.first_registered_ms, now_ms, quality));
     segment.result_processed = false;
     enforce_limits(effects);
 }
@@ -225,7 +330,8 @@ SchedulerResult TranslationScheduler::register_segment(
             if (job->id.segment != input.key || job->order_key == input.order_key) continue;
             job = std::make_shared<const TranslationJob>(
                 job->id, input.order_key, job->request_kind, job->source_text, job->context,
-                job->settings, job->first_seen_ms, job->first_registered_ms, job->queued_ms);
+                job->settings, job->first_seen_ms, job->first_registered_ms, job->queued_ms,
+                job->quality_reason);
         }
         result.reject = SchedulerRejectReason::Duplicate;
         return result;
@@ -248,6 +354,7 @@ SchedulerResult TranslationScheduler::register_segment(
     segment->segment = input;
     segment->segment.first_seen_ms = first_seen;
     segment->current_job = {input.key, input.source_revision, 1};
+    reset_quality_state(*segment);
     for (const auto &replaced : input.replaces) {
         if (replaced == input.key) continue;
         auto *old = find_mutable(replaced);
@@ -261,7 +368,8 @@ SchedulerResult TranslationScheduler::register_segment(
 }
 
 SchedulerResult TranslationScheduler::request_quality_retry(
-    const SegmentKey &key, const std::vector<std::string> &context, uint64_t now_ms)
+    const SegmentKey &key, const std::vector<std::string> &context, uint64_t now_ms,
+    QualitySuspectReason reason, uint64_t page_publication, size_t page_index, uint64_t expires_ms)
 {
     SchedulerResult result;
     result.effects = tick(now_ms);
@@ -270,12 +378,50 @@ SchedulerResult TranslationScheduler::request_quality_retry(
     else if (!segment) result.reject = SchedulerRejectReason::MissingSegment;
     else if (segment->display == CaptionDisplayState::Retired)
         result.reject = SchedulerRejectReason::RetiredSegment;
-    else if (segment->current_job.attempt_id != 1) result.reject = SchedulerRejectReason::Duplicate;
-    else {
-        segment->current_job.attempt_id = 2;
-        enqueue(*segment, TranslationRequestKind::QualityRetry, context, now_ms, result.effects);
-        result.accepted = segment->display != CaptionDisplayState::Retired;
-        if (!result.accepted) result.reject = SchedulerRejectReason::RetiredSegment;
+    else if (segment->quality_retry_consumed || segment->current_job.attempt_id != 1)
+        result.reject = SchedulerRejectReason::Duplicate;
+    else if (segment->display != CaptionDisplayState::Visible)
+        result.reject = SchedulerRejectReason::NotVisible;
+    else if (segment->translated_text.empty()) result.reject = SchedulerRejectReason::EmptyText;
+    else if (!quality_retry_enabled_) {
+        segment->quality_retry_consumed = true;
+        segment->quality_suspected_pending = false;
+        result.reject = SchedulerRejectReason::QualityDisabled;
+        result.effects.quality_drops.push_back({segment->current_job, QualityRetryOutcome::Disabled});
+    } else {
+        if (expires_ms != 0) segment->quality_expires_ms = expires_ms;
+        if (page_publication != 0 || page_index != 0) {
+            segment->quality_page_publication = page_publication;
+            segment->quality_page_index = page_index;
+        }
+        if (!quality_remaining_ok(*segment, now_ms)) {
+            segment->quality_retry_consumed = true;
+            segment->quality_suspected_pending = false;
+            result.reject = SchedulerRejectReason::InsufficientLifetime;
+            result.effects.quality_drops.push_back({segment->current_job, QualityRetryOutcome::Expired});
+        } else if (quality_queued_count() >= kQualityMaxRetryQueued || queued_.size() >= kMaxQueued) {
+            segment->quality_retry_consumed = true;
+            segment->quality_suspected_pending = false;
+            result.reject = SchedulerRejectReason::QualityQueueFull;
+            result.effects.quality_drops.push_back({segment->current_job, QualityRetryOutcome::QueueFull});
+        } else {
+            if (reason != QualitySuspectReason::None) segment->quality_reason = reason;
+            segment->current_job.attempt_id = 2;
+            segment->quality_retry_consumed = true;
+            segment->quality_suspected_pending = false;
+            enqueue(*segment, TranslationRequestKind::QualityRetry, context, now_ms, result.effects,
+                    segment->quality_reason);
+            result.accepted = segment->display != CaptionDisplayState::Retired;
+            if (!result.accepted) result.reject = SchedulerRejectReason::RetiredSegment;
+            else if (!std::any_of(queued_.begin(), queued_.end(), [&](const auto &job) {
+                         return job->id.segment == key && is_quality_job(job);
+                     })) {
+                result.accepted = false;
+                result.reject = SchedulerRejectReason::QualityQueueFull;
+                result.effects.quality_drops.push_back(
+                    {segment->current_job, QualityRetryOutcome::QueueFull});
+            }
+        }
     }
     return result;
 }
@@ -284,27 +430,70 @@ SchedulerDispatch TranslationScheduler::dispatch(uint64_t now_ms)
 {
     SchedulerDispatch result;
     result.effects = tick(now_ms);
-    if (running_.size() >= kMaxInFlight || queued_.empty()) return result;
-    const bool prefer_initial = last_dispatch_was_update_ &&
-        std::any_of(queued_.begin(), queued_.end(), [](const auto &job) {
-            return job->request_kind == TranslationRequestKind::Initial;
+    while (running_.size() < kMaxInFlight && !queued_.empty()) {
+        const bool general_queued = std::any_of(queued_.begin(), queued_.end(), [&](const auto &job) {
+            return !is_quality_job(job);
         });
-    auto rank = [&](const TranslationJobPtr &job) {
-        const auto *segment = find(job->id.segment);
-        if (prefer_initial && job->request_kind == TranslationRequestKind::Initial)
-            return 0;
-        if (!prefer_initial && segment->display == CaptionDisplayState::Visible &&
-            job->request_kind == TranslationRequestKind::SourceUpdate) return 0;
-        return job->request_kind == TranslationRequestKind::QualityRetry ? 2 : 1;
-    };
-    auto next = std::min_element(queued_.begin(), queued_.end(), [&](const auto &a, const auto &b) {
-        if (rank(a) != rank(b)) return rank(a) < rank(b);
-        return find(a->id.segment)->segment.order_key < find(b->id.segment)->segment.order_key;
-    });
-    result.job = *next;
-    queued_.erase(next);
-    running_.push_back({result.job->id, false});
-    last_dispatch_was_update_ = result.job->request_kind == TranslationRequestKind::SourceUpdate;
+        const bool quality_running = quality_in_flight_count() >= kQualityMaxRetryInFlight;
+        const bool prefer_initial = last_dispatch_was_update_ &&
+            std::any_of(queued_.begin(), queued_.end(), [](const auto &job) {
+                return job->request_kind == TranslationRequestKind::Initial;
+            });
+        auto rank = [&](const TranslationJobPtr &job) {
+            const auto *segment = find(job->id.segment);
+            if (prefer_initial && job->request_kind == TranslationRequestKind::Initial)
+                return 0;
+            if (!prefer_initial && segment && segment->display == CaptionDisplayState::Visible &&
+                job->request_kind == TranslationRequestKind::SourceUpdate) return 0;
+            return is_quality_job(job) ? 2 : 1;
+        };
+        auto eligible = [&](const TranslationJobPtr &job) {
+            if (!is_quality_job(job)) return true;
+            if (general_queued || quality_running) return false;
+            const auto *segment = find(job->id.segment);
+            if (!segment || segment->display != CaptionDisplayState::Visible) return false;
+            return quality_remaining_ok(*segment, now_ms);
+        };
+        auto next = queued_.end();
+        for (auto it = queued_.begin(); it != queued_.end(); ++it) {
+            if (!eligible(*it)) continue;
+            if (next == queued_.end() || rank(*it) < rank(*next) ||
+                (rank(*it) == rank(*next) &&
+                 find((*it)->id.segment)->segment.order_key <
+                     find((*next)->id.segment)->segment.order_key))
+                next = it;
+        }
+        if (next == queued_.end()) {
+            for (auto it = queued_.begin(); it != queued_.end();) {
+                if (!is_quality_job(*it)) {
+                    ++it;
+                    continue;
+                }
+                const auto *segment = find((*it)->id.segment);
+                const bool expired = !segment || segment->display != CaptionDisplayState::Visible ||
+                                     !quality_remaining_ok(*segment, now_ms);
+                if (expired && !(general_queued || quality_running)) {
+                    drop_quality_job(*it, QualityRetryOutcome::Expired, result.effects);
+                    it = queued_.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            break;
+        }
+        if (is_quality_job(*next) &&
+            (!find((*next)->id.segment) ||
+             !quality_remaining_ok(*find((*next)->id.segment), now_ms))) {
+            drop_quality_job(*next, QualityRetryOutcome::Expired, result.effects);
+            queued_.erase(next);
+            continue;
+        }
+        result.job = *next;
+        queued_.erase(next);
+        running_.push_back({result.job->id, false});
+        last_dispatch_was_update_ = result.job->request_kind == TranslationRequestKind::SourceUpdate;
+        break;
+    }
     return result;
 }
 
@@ -398,6 +587,80 @@ bool TranslationScheduler::forget_retired(const SegmentKey &key)
     if (it == segments_.end()) return false;
     segments_.erase(it);
     return true;
+}
+
+SchedulerResult TranslationScheduler::set_quality_retry(bool enabled, uint64_t now_ms)
+{
+    SchedulerResult result;
+    result.effects = tick(now_ms);
+    if (quality_retry_enabled_ == enabled) {
+        result.accepted = true;
+        return result;
+    }
+    quality_retry_enabled_ = enabled;
+    result.accepted = true;
+    if (enabled) return result;
+    for (auto &segment : segments_) {
+        if (segment.quality_verdict == QualityVerdict::Suspected || segment.quality_suspected_pending)
+            segment.quality_retry_consumed = true;
+        segment.quality_suspected_pending = false;
+    }
+    for (auto it = queued_.begin(); it != queued_.end();) {
+        if (is_quality_job(*it)) {
+            drop_quality_job(*it, QualityRetryOutcome::Disabled, result.effects);
+            it = queued_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto &run : running_) {
+        if (is_quality_id(run.id) && !run.cancel_requested) {
+            run.cancel_requested = true;
+            result.effects.cancel.push_back(run.id);
+        }
+    }
+    return result;
+}
+
+void TranslationScheduler::set_quality_judgement(const SegmentKey &key,
+                                                 const QualityJudgement &judgement,
+                                                 bool eligible_for_retry)
+{
+    auto *segment = find_mutable(key);
+    if (!segment || segment->display == CaptionDisplayState::Retired) return;
+    segment->quality_verdict = judgement.verdict;
+    segment->quality_reason = judgement.reason;
+    segment->quality_detect_us = judgement.detect_us;
+    segment->similarity_computed = judgement.similarity_computed;
+    segment->similarity = judgement.similarity;
+    segment->quality_suspected_pending =
+        eligible_for_retry && judgement.verdict == QualityVerdict::Suspected &&
+        !segment->quality_retry_consumed && segment->current_job.attempt_id == 1;
+}
+
+void TranslationScheduler::note_display_page(const SegmentKey &key, uint64_t publication,
+                                             size_t page_index, uint64_t expires_ms, uint64_t now_ms,
+                                             SchedulerEffects &effects)
+{
+    auto *segment = find_mutable(key);
+    if (!segment || segment->display == CaptionDisplayState::Retired) return;
+    const bool reserved = segment->quality_retry_consumed && segment->current_job.attempt_id == 2;
+    if (reserved && (segment->quality_page_publication != 0 || segment->quality_page_index != 0) &&
+        (segment->quality_page_publication != publication ||
+         segment->quality_page_index != page_index)) {
+        drop_quality_for_segment(key, QualityRetryOutcome::Expired, effects);
+        return;
+    }
+    if (expires_ms != 0) {
+        if (segment->quality_expires_ms == 0) segment->quality_expires_ms = expires_ms;
+        else segment->quality_expires_ms = std::min(segment->quality_expires_ms, expires_ms);
+    }
+    if (!reserved) {
+        segment->quality_page_publication = publication;
+        segment->quality_page_index = page_index;
+        if (expires_ms != 0) segment->quality_expires_ms = expires_ms;
+    }
+    expire_quality_retries(now_ms, effects);
 }
 
 }

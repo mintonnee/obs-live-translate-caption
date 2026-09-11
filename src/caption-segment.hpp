@@ -1,4 +1,5 @@
 #pragma once
+#include "translation-quality-types.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -122,7 +123,7 @@ struct TranslationSettingsSnapshot {
     std::string target_code;
     std::string target_name;
     std::string model;
-    std::vector<std::string> glossary;
+    std::vector<std::string> glossary; // STT names; never force source spelling.
 };
 
 // Construct with all fields. Queues share an immutable value, never live settings.
@@ -137,15 +138,18 @@ struct TranslationJob {
     const uint64_t first_seen_ms;
     const uint64_t first_registered_ms; // Preserved across source updates and retries.
     const uint64_t queued_ms;
+    const QualitySuspectReason quality_reason;
 
     TranslationJob(TranslationJobId job_id, SegmentOrderKey order,
                    TranslationRequestKind kind, std::string source,
                    std::vector<std::string> previous_context,
                    TranslationSettingsSnapshot settings_snapshot, uint64_t observed_ms,
-                   uint64_t registered_ms, uint64_t enqueued_ms)
+                   uint64_t registered_ms, uint64_t enqueued_ms,
+                   QualitySuspectReason quality = QualitySuspectReason::None)
         : id(job_id), order_key(order), request_kind(kind), source_text(std::move(source)),
           context(std::move(previous_context)), settings(std::move(settings_snapshot)),
-          first_seen_ms(observed_ms), first_registered_ms(registered_ms), queued_ms(enqueued_ms)
+          first_seen_ms(observed_ms), first_registered_ms(registered_ms), queued_ms(enqueued_ms),
+          quality_reason(quality)
     {
     }
 };
@@ -163,6 +167,7 @@ struct TranslationCompletion {
     std::string translated_text;
     uint64_t started_ms = 0;
     uint64_t completed_ms = 0;
+    std::string finish_reason; // candidates[0].finishReason; do not quality-retry MAX_TOKENS
 };
 
 // Identity matching is necessary but not sufficient: under the same state lock,

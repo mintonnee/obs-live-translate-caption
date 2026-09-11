@@ -75,7 +75,7 @@
 | 텍스트 소스 갱신 API: `obs_get_source_by_name` → `obs_data_set_string(settings, "text", …)` → `obs_source_update` → `obs_source_release`. 텍스트 소스의 unversioned id는 Windows `text_gdiplus`(version 3), macOS/Linux `text_ft2_source`(version 2)이며 `obs_source_get_id()`는 `text_gdiplus_v3`처럼 버전 접미사가 붙은 값을 돌려주므로 판별에는 `obs_source_get_unversioned_id()`를 쓴다. | `.deps/obs-studio-31.1.1/libobs/obs.h:1053`, `.deps/obs-studio-31.1.1/plugins/obs-text/gdiplus/obs-text.cpp:1083`, `plugins/text-freetype2/text-freetype2.c:71` |
 | 단일 세션 규칙(필터 first-wins, 소스 first-wins)은 유지된다. `captions` 모드에서 *Gemini Translated Audio* 소스는 무음이다. | `docs/superpowers/specs/2026-06-19-single-session-guard-design.md`, `src/filter.cpp` `is_primary_filter` |
 | 빌드 환경: CMake ≥ 3.28, VS 2022(`windows-x64`) 또는 VS 2026(`windows-x64-vs2026`), Catch2 v3.5.2 `unit-tests` 타깃. | `CMakePresets.json`, `tests/CMakeLists.txt` |
-| 대상 언어 목록은 `src/languages.hpp`를 재사용한다. 번역 프롬프트에는 BCP-47 코드와 영어 이름을 함께 넣는다. | `src/languages.hpp` |
+| 대상 언어 목록은 `src/languages.hpp`를 재사용한다. 번역 프롬프트에는 BCP-47 코드와 자국어 이름(예: `日本語 (ja)`)을 함께 넣는다. | `src/languages.hpp` |
 
 ## 4. 기능 범위
 
@@ -132,10 +132,11 @@ UI: `output_mode`는 콤보(`Translated speech` / `Translated captions`). 텍스
 
 ### 4.4 번역 요청 (`translate-protocol` + HTTP 워커)
 
-계획된 확장: [005-caption-segments-and-versioning.md](005-caption-segments-and-versioning.md)
+후속 스펙: [005-caption-segments-and-versioning.md](005-caption-segments-and-versioning.md)
 §4.1·4.5–4.6이 요청 버전·3개 슬롯·큐 상한·설정 스냅샷을 정의하고,
-[006-translation-quality-and-retry.md](006-translation-quality-and-retry.md)가 도착 언어별
-프롬프트·별도 표기 사전·로컬 품질 검사·최대 1회 교정을 정의한다. 두 확장은 구현 미착수다.
+[006-translation-quality-and-retry.md](006-translation-quality-and-retry.md)가 짧은 공통
+프롬프트·로컬 품질 검사·최대 1회 교정을 정의한다. 아래 최초 설계에서
+프롬프트·품질 처리와 요청 버전·결과 반영은 두 후속 스펙을 우선한다.
 
 - 요청 빌더 `build_translate_request(target_code, target_name, context[], text)`:
   - `system_instruction`: "실시간 자막 번역기. 입력을 `<target_name> (<target_code>)`로 번역.
@@ -143,11 +144,9 @@ UI: `output_mode`는 콤보(`Translated speech` / `Translated captions`). 텍스
   - `contents`: 단일 `user` 턴. 본문에 직전 최대 3개 원문 세그먼트를 "Context:" 블록으로,
     현재 세그먼트를 "Translate:" 블록으로 넣는다(모델 턴을 마지막에 두지 않기 위한 결정).
   - `generationConfig`: `maxOutputTokens: 256`만. `thinkingConfig`와 샘플링 파라미터 없음(§3).
-  - 용어집: `caption_custom_vocabulary`의 항목을 system instruction **앞부분**에 "Glossary of proper nouns and terms"로
-    나열하고, 고유명사로 취급해 대상 언어의 외래어 표기(음차 또는 관례상 라틴 문자)로 쓰되 일반 단어로 번역하지
-    말라고 지시한다. 지시문은 "출력은 항상 대상 언어"로 끝난다. 처음에는 끝에 "표기를 그대로 유지"로 넣었는데,
-    한글 이름이 용어집에 있으면 한국어→일본어에서 문장 전체가 번역되지 않고 나오는 경우가 있어 순서와 문구를
-    바꿨다(2026-09-05).
+  - 용어집: `caption_custom_vocabulary`는 고유명사 목록으로 전달하며 원문 철자 보존을
+    강제하지 않는다. `006` §4.1–4.2에 따라 짧은 공통 지시와 설정한 이름 목록을
+    전달한다. 일본어 전용 규칙·예시는 제거하며 현재 공통 지시의 대상 언어 출력 강조는 유지한다.
 - 응답 파서 `parse_translate_response(json) -> optional<string>`: 성공 기준 6.
 - HTTP 워커: `ix::HttpClient`로 POST, 타임아웃 5 s, 동시 요청 최대 3개. 결과는 `seq`와 함께
   `CaptionComposer::on_translated(seq, text)` 또는 `on_failed(seq, reason)`으로 넘긴다.

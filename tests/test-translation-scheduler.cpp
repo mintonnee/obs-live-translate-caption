@@ -128,6 +128,8 @@ TEST_CASE("quality retry dominates prior attempt and a new revision resets attem
     auto scheduler = make_scheduler();
     scheduler.register_segment(make_segment(1, 2), {}, 10);
     auto a1 = scheduler.dispatch(10).job;
+    REQUIRE(scheduler.complete(success(a1, "a1"), 11).accepted);
+    REQUIRE(scheduler.mark_visible(a1->id.segment, 11).accepted);
     REQUIRE(scheduler.request_quality_retry(a1->id.segment, {}, 11).accepted);
     REQUIRE(scheduler.request_quality_retry(a1->id.segment, {}, 12).reject ==
             SchedulerRejectReason::Duplicate);
@@ -232,7 +234,6 @@ TEST_CASE("stale deadline survives revisions retries and expires at exactly six 
     scheduler.register_segment(make_segment(1), {}, 100);
     auto old = scheduler.dispatch(101).job;
     REQUIRE(scheduler.register_segment(make_segment(1, 2), {}, 6000).accepted);
-    REQUIRE(scheduler.request_quality_retry(old->id.segment, {}, 6099).accepted);
     REQUIRE(scheduler.tick(6099).retired.empty());
     REQUIRE(scheduler.tick(50).retired.empty()); // Defensive clock regression, no underflow.
     SchedulerEffects effects;
@@ -331,17 +332,24 @@ TEST_CASE("display updates get priority with one update fairness then waiting in
 TEST_CASE("segment ordering uses order keys and retries have lower priority")
 {
     auto scheduler = make_scheduler();
-    auto a = make_segment(1);
-    auto b = make_segment(2);
-    auto c = make_segment(3);
+    auto a = make_segment(4);
+    auto b = make_segment(5);
+    auto c = make_segment(1);
     a.order_key = {3, 0};
     b.order_key = {2, 0};
     c.order_key = {1, 0};
-    for (const auto &segment : {a, b, c}) scheduler.register_segment(segment, {}, 0);
-    scheduler.request_quality_retry(c.key, {}, 0);
+    scheduler.register_segment(c, {}, 0);
+    auto first = scheduler.dispatch(0).job;
+    REQUIRE(scheduler.complete(success(first), 0).accepted);
+    REQUIRE(scheduler.mark_visible(c.key, 0).accepted);
+    REQUIRE(scheduler.request_quality_retry(c.key, {}, 0).accepted);
+    scheduler.register_segment(a, {}, 0);
+    scheduler.register_segment(b, {}, 0);
     REQUIRE(scheduler.dispatch(0).job->id.segment == b.key);
     REQUIRE(scheduler.dispatch(0).job->id.segment == a.key);
-    REQUIRE(scheduler.dispatch(0).job->id.segment == c.key);
+    auto retry = scheduler.dispatch(0).job;
+    REQUIRE(retry->id.segment == c.key);
+    REQUIRE(retry->request_kind == TranslationRequestKind::QualityRetry);
 }
 
 TEST_CASE("one thousand queued segments stay bounded with every retirement counted")
@@ -503,4 +511,166 @@ TEST_CASE("zero identifiers and exhausted monotonic identifiers cannot be reused
     REQUIRE(scheduler.forget_retired(maximum.key));
     REQUIRE(scheduler.register_segment(maximum, {}, 0).reject == SchedulerRejectReason::ReusedId);
     REQUIRE(scheduler.register_segment(make_segment(1), {}, 0).reject == SchedulerRejectReason::ReusedId);
+}
+
+namespace {
+
+void force_visible(TranslationScheduler &scheduler, const SegmentKey &key)
+{
+    const_cast<ScheduledSegment *>(scheduler.find(key))->display = CaptionDisplayState::Visible;
+}
+
+TranslationJobPtr complete_visible(TranslationScheduler &scheduler, uint64_t id, uint64_t now)
+{
+    scheduler.register_segment(make_segment(id), {}, now);
+    auto job = scheduler.dispatch(now).job;
+    REQUIRE(job);
+    REQUIRE(scheduler.complete(success(job, "translated"), now).accepted);
+    REQUIRE(scheduler.mark_visible(job->id.segment, now).accepted);
+    return job;
+}
+
+}
+
+TEST_CASE("quality retry stays queued while three general jobs occupy the slots")
+{
+    TransportBarrier barrier;
+    auto first = complete_visible(barrier.scheduler, 1, 0);
+    REQUIRE(barrier.scheduler.request_quality_retry(first->id.segment, {}, 0).accepted);
+    for (uint64_t id = 2; id <= 4; ++id)
+        REQUIRE(barrier.scheduler.register_segment(make_segment(id), {}, 0).accepted);
+    barrier.start(0);
+    REQUIRE(barrier.held.size() == 3);
+    REQUIRE(std::none_of(barrier.held.begin(), barrier.held.end(), [](const auto &job) {
+        return job->request_kind == TranslationRequestKind::QualityRetry;
+    }));
+    REQUIRE(barrier.scheduler.quality_queued_count() == 1);
+    REQUIRE_FALSE(barrier.scheduler.dispatch(0).job);
+}
+
+TEST_CASE("one quality retry in flight blocks a second quality retry")
+{
+    TransportBarrier barrier;
+    auto first = complete_visible(barrier.scheduler, 1, 0);
+    REQUIRE(barrier.scheduler.request_quality_retry(first->id.segment, {}, 0).accepted);
+    auto extra = make_segment(5);
+    barrier.scheduler.register_segment(extra, {}, 0);
+    auto extra_job = barrier.scheduler.dispatch(0).job;
+    REQUIRE(extra_job->id.segment == extra.key);
+    REQUIRE(barrier.scheduler.complete(success(extra_job), 0).accepted);
+    force_visible(barrier.scheduler, extra.key);
+    REQUIRE(barrier.scheduler.request_quality_retry(extra.key, {}, 0).accepted);
+    REQUIRE(barrier.scheduler.quality_queued_count() == 2);
+    barrier.scheduler.register_segment(make_segment(6), {}, 0);
+    barrier.scheduler.register_segment(make_segment(7), {}, 0);
+    barrier.start(0);
+    const auto quality = static_cast<size_t>(std::count_if(
+        barrier.held.begin(), barrier.held.end(),
+        [](const auto &job) { return job->request_kind == TranslationRequestKind::QualityRetry; }));
+    REQUIRE(barrier.held.size() == 3);
+    REQUIRE(quality == 1);
+    REQUIRE(barrier.scheduler.quality_in_flight_count() == 1);
+    REQUIRE(barrier.scheduler.quality_queued_count() == 1);
+    REQUIRE_FALSE(barrier.scheduler.dispatch(0).job);
+    REQUIRE(barrier.release(0, 1).accepted);
+    auto next = barrier.scheduler.dispatch(1).job;
+    REQUIRE((!next || next->request_kind != TranslationRequestKind::QualityRetry));
+    REQUIRE(barrier.scheduler.quality_in_flight_count() == 1);
+}
+
+TEST_CASE("queued general work blocks quality retry even when a slot is free")
+{
+    auto scheduler = make_scheduler();
+    auto first = complete_visible(scheduler, 1, 0);
+    REQUIRE(scheduler.request_quality_retry(first->id.segment, {}, 0).accepted);
+    REQUIRE(scheduler.register_segment(make_segment(2), {}, 0).accepted);
+    REQUIRE(scheduler.register_segment(make_segment(3), {}, 0).accepted);
+    auto first_dispatch = scheduler.dispatch(0).job;
+    REQUIRE(first_dispatch->request_kind != TranslationRequestKind::QualityRetry);
+    REQUIRE(first_dispatch->id.segment.segment_id == 2);
+    auto second_dispatch = scheduler.dispatch(0).job;
+    REQUIRE(second_dispatch->request_kind != TranslationRequestKind::QualityRetry);
+    REQUIRE(second_dispatch->id.segment.segment_id == 3);
+    REQUIRE(scheduler.quality_queued_count() == 1);
+    REQUIRE(scheduler.in_flight_count() == 2);
+}
+
+TEST_CASE("quality retry dispatch requires 1000ms remaining lifetime")
+{
+    auto scheduler = make_scheduler();
+    auto first = complete_visible(scheduler, 1, 0);
+    SECTION("999 ms remaining is dropped without HTTP") {
+        REQUIRE(scheduler.request_quality_retry(first->id.segment, {}, 0, QualitySuspectReason::None,
+                                                1, 0, 1000).accepted);
+        REQUIRE_FALSE(scheduler.dispatch(1).job);
+        REQUIRE(scheduler.quality_queued_count() == 0);
+        REQUIRE(scheduler.in_flight_count() == 0);
+    }
+    SECTION("1000 ms remaining is allowed") {
+        REQUIRE(scheduler.request_quality_retry(first->id.segment, {}, 0, QualitySuspectReason::None,
+                                                1, 0, 1000).accepted);
+        auto retry = scheduler.dispatch(0).job;
+        REQUIRE(retry);
+        REQUIRE(retry->request_kind == TranslationRequestKind::QualityRetry);
+    }
+    SECTION("reservation itself rejects insufficient lifetime") {
+        REQUIRE(scheduler.request_quality_retry(first->id.segment, {}, 1, QualitySuspectReason::None,
+                                                1, 0, 1000).reject ==
+                SchedulerRejectReason::InsufficientLifetime);
+        REQUIRE(scheduler.quality_queued_count() == 0);
+    }
+}
+
+TEST_CASE("quality retry queue cap omits the fifth reservation")
+{
+    auto scheduler = make_scheduler();
+    std::vector<SegmentKey> keys;
+    for (uint64_t id = 1; id <= 5; ++id) {
+        scheduler.register_segment(make_segment(id), {}, 0);
+        auto job = scheduler.dispatch(0).job;
+        REQUIRE(scheduler.complete(success(job), 0).accepted);
+        keys.push_back(job->id.segment);
+        if (id == 1) REQUIRE(scheduler.mark_visible(keys.back(), 0).accepted);
+        else force_visible(scheduler, keys.back());
+        const auto retry = scheduler.request_quality_retry(keys.back(), {}, 0);
+        if (id <= 4) {
+            REQUIRE(retry.accepted);
+        } else {
+            REQUIRE_FALSE(retry.accepted);
+            REQUIRE(retry.reject == SchedulerRejectReason::QualityQueueFull);
+        }
+    }
+    REQUIRE(scheduler.quality_queued_count() == 4);
+}
+
+TEST_CASE("quality retry disable drops queued retries without changing generation")
+{
+    auto scheduler = make_scheduler();
+    auto first = complete_visible(scheduler, 1, 0);
+    REQUIRE(scheduler.request_quality_retry(first->id.segment, {}, 0).accepted);
+    REQUIRE(scheduler.generation() == 1);
+    auto disabled = scheduler.set_quality_retry(false, 0);
+    REQUIRE(disabled.accepted);
+    REQUIRE(scheduler.quality_queued_count() == 0);
+    REQUIRE(scheduler.generation() == 1);
+    REQUIRE(scheduler.find(first->id.segment)->translated_text == "translated");
+    REQUIRE(scheduler.find(first->id.segment)->display == CaptionDisplayState::Visible);
+    REQUIRE(scheduler.request_quality_retry(first->id.segment, {}, 0).reject ==
+            SchedulerRejectReason::Duplicate);
+    REQUIRE(scheduler.set_quality_retry(true, 0).accepted);
+    REQUIRE(scheduler.request_quality_retry(first->id.segment, {}, 0).reject ==
+            SchedulerRejectReason::Duplicate);
+}
+
+TEST_CASE("quality retry is not reserved until the segment is visible")
+{
+    auto scheduler = make_scheduler();
+    scheduler.register_segment(make_segment(1), {}, 0);
+    auto job = scheduler.dispatch(0).job;
+    REQUIRE(scheduler.complete(success(job), 0).accepted);
+    REQUIRE(scheduler.request_quality_retry(job->id.segment, {}, 0).reject ==
+            SchedulerRejectReason::NotVisible);
+    REQUIRE(scheduler.quality_queued_count() == 0);
+    REQUIRE(scheduler.mark_visible(job->id.segment, 0).accepted);
+    REQUIRE(scheduler.request_quality_retry(job->id.segment, {}, 0).accepted);
 }

@@ -1,4 +1,5 @@
 #include "caption-pipeline.hpp"
+#include "translation-quality.hpp"
 #include <algorithm>
 
 namespace lt {
@@ -43,12 +44,73 @@ void CaptionPipeline::record_retire(const SegmentKey &key, CaptionRetireReason r
     }
 }
 
+void CaptionPipeline::record_quality_drops(const std::vector<QualityRetryDrop> &drops, uint64_t now_ms,
+                                          CaptionPipelineResult &result)
+{
+    for (const auto &drop : drops) {
+        CaptionPipelineEvent event;
+        event.kind = CaptionPipelineEventKind::QualityRetryDropped;
+        event.id = drop.id;
+        event.request_kind = TranslationRequestKind::QualityRetry;
+        event.retry_outcome = drop.outcome;
+        event.at_ms = now_ms;
+        event.queue_depth = queued_count();
+        fill_quality_event(event, scheduler_.find(drop.id.segment));
+        result.events.push_back(event);
+    }
+}
+
+void CaptionPipeline::fill_quality_event(CaptionPipelineEvent &event,
+                                         const ScheduledSegment *state) const
+{
+    if (!state) return;
+    event.quality_reason = state->quality_reason;
+    event.quality_verdict = state->quality_verdict;
+    event.detect_us = state->quality_detect_us;
+    event.similarity_computed = state->similarity_computed;
+    event.similarity = state->similarity;
+}
+
+QualityJudgement CaptionPipeline::inspect_segment(const ScheduledSegment &state,
+                                                  std::string_view output) const
+{
+    const auto &settings = scheduler_.translation_settings();
+    QualityInspectInput input;
+    input.target_code = settings.target_code;
+    input.source = state.segment.source_text;
+    input.output = output;
+    return inspect_translation_quality(input);
+}
+
+void CaptionPipeline::maybe_reserve_quality(const SegmentKey &key, uint64_t now_ms,
+                                            CaptionPipelineResult &result)
+{
+    const auto *state = scheduler_.find(key);
+    if (!state || !state->quality_suspected_pending || state->quality_retry_consumed) return;
+    if (state->display != CaptionDisplayState::Visible) return;
+    auto status = composer_.display_status(key);
+    const auto snap = composer_.snapshot();
+    const uint64_t publication = (snap.key && *snap.key == key) ? snap.publication : 0;
+    const size_t page_index = status ? status->page_index : 0;
+    const uint64_t expires = status && status->page_expires_ms ? *status->page_expires_ms : 0;
+    auto retry = scheduler_.request_quality_retry(key, context(state->segment), now_ms,
+                                                  state->quality_reason, publication, page_index,
+                                                  expires);
+    scheduler_effects(retry.effects, now_ms, result);
+    if (retry.accepted) {
+        const auto *queued = scheduler_.find(key);
+        if (queued)
+            display_events(composer_.expect_job(queued->current_job, now_ms).events, now_ms, result);
+    }
+}
+
 void CaptionPipeline::scheduler_effects(const SchedulerEffects &effects, uint64_t now_ms,
                                        CaptionPipelineResult &result)
 {
     for (const auto &id : effects.cancel)
         if (std::find(result.cancel.begin(), result.cancel.end(), id) == result.cancel.end())
             result.cancel.push_back(id);
+    record_quality_drops(effects.quality_drops, now_ms, result);
     for (const auto &retired : effects.retired) {
         record_retire(retired.key, retired.reason, now_ms, result);
         display_events(composer_.retire(retired.key, retired.reason, now_ms).events, now_ms, result);
@@ -80,12 +142,23 @@ void CaptionPipeline::display_events(const std::vector<CaptionDisplayEvent> &eve
                 event.request_kind = kind(event.id);
                 event.first_seen_to_display_ms = elapsed(state->segment.first_seen_ms, now_ms);
                 scheduler_effects(scheduler_.mark_visible(display.key, now_ms).effects, now_ms, result);
+                const auto status = composer_.display_status(display.key);
+                const auto snap = composer_.snapshot();
+                const uint64_t publication =
+                    (snap.key && *snap.key == display.key) ? snap.publication : 0;
+                const size_t page_index = status ? status->page_index : display.page_index;
+                const uint64_t expires = status && status->page_expires_ms ? *status->page_expires_ms : 0;
+                SchedulerEffects page_effects;
+                scheduler_.note_display_page(display.key, publication, page_index, expires, now_ms,
+                                             page_effects);
+                scheduler_effects(page_effects, now_ms, result);
                 segmenter_.set_display_state(display.key, CaptionDisplayState::Visible);
                 for (auto &logical : logical_) {
                     if (logical.segment.key != display.key) continue;
                     logical.state = CaptionDisplayState::Visible;
                     if (logical.ready_ms) event.display_wait_ms = elapsed(*logical.ready_ms, now_ms);
                 }
+                maybe_reserve_quality(display.key, now_ms, result);
             }
         }
         event.queue_depth = queued_count();
@@ -108,6 +181,8 @@ CaptionPipelineResult CaptionPipeline::reset(uint64_t generation,
     segmenter_.reset(generation);
     segmenter_.set_incremental(config.incremental);
     incremental_ = config.incremental;
+    quality_retry_ = config.quality_retry;
+    scheduler_.set_quality_retry(config.quality_retry, now_ms);
     display_events(composer_.set_config(config.display, now_ms).events, now_ms, result);
     logical_.clear();
     current_utterance_ = 0;
@@ -157,6 +232,24 @@ CaptionPipelineResult CaptionPipeline::set_incremental(bool enabled, uint64_t no
     event.id.segment.generation = generation();
     event.at_ms = now_ms;
     event.count = enabled ? 1 : 0;
+    result.events.push_back(event);
+    return result;
+}
+
+CaptionPipelineResult CaptionPipeline::set_quality_retry(bool enabled, uint64_t now_ms)
+{
+    CaptionPipelineResult result;
+    if (!generation()) { result.accepted = false; return result; }
+    if (quality_retry_ == enabled) return result;
+    quality_retry_ = enabled;
+    auto changed = scheduler_.set_quality_retry(enabled, now_ms);
+    scheduler_effects(changed.effects, now_ms, result);
+    CaptionPipelineEvent event;
+    event.kind = CaptionPipelineEventKind::QualityRetryChanged;
+    event.id.segment.generation = generation();
+    event.at_ms = now_ms;
+    event.count = enabled ? 1 : 0;
+    event.queue_depth = queued_count();
     result.events.push_back(event);
     return result;
 }
@@ -323,6 +416,10 @@ CaptionPipelineDispatch CaptionPipeline::dispatch(uint64_t now_ms)
         event.segment_wait_ms = elapsed(result.job->first_seen_ms, result.job->first_registered_ms);
         event.queue_wait_ms = elapsed(result.job->queued_ms, now_ms);
         event.queue_depth = queued_count();
+        if (result.job->request_kind == TranslationRequestKind::QualityRetry) {
+            event.retry_queue_ms = event.queue_wait_ms;
+            fill_quality_event(event, scheduler_.find(result.job->id.segment));
+        }
         result.result.events.push_back(event);
     }
     return result;
@@ -335,6 +432,10 @@ CaptionPipelineResult CaptionPipeline::complete(const TranslationCompletion &com
     const auto completed = scheduler_.complete(completion, now_ms);
     result.accepted = completed.accepted;
     CaptionComposeReject compose_reject = CaptionComposeReject::None;
+    const bool quality_retry = completion.id.attempt_id > 1;
+    QualityJudgement judgement;
+    bool inspected = false;
+    std::optional<QualityRetryOutcome> retry_outcome;
     // Scheduler payload validation can turn nominal success into terminal failure.
     if (completed.accepted || completed.reject == SchedulerRejectReason::TranslationLimit ||
         completed.reject == SchedulerRejectReason::InvalidUtf8 ||
@@ -343,6 +444,60 @@ CaptionPipelineResult CaptionPipeline::complete(const TranslationCompletion &com
         effective.outcome = completed.outcome;
         effective.failure = completed.failure;
         if (effective.outcome != TranslationOutcome::Success) effective.translated_text.clear();
+        const auto *state = scheduler_.find(completion.id.segment);
+        if (completed.accepted && completed.outcome == TranslationOutcome::Success && state) {
+            judgement = inspect_segment(*state, completion.translated_text);
+            inspected = true;
+            const bool max_tokens = completion.finish_reason == "MAX_TOKENS";
+            if (!quality_retry) {
+                scheduler_.set_quality_judgement(completion.id.segment, judgement,
+                                                 !max_tokens && quality_retry_);
+                CaptionPipelineEvent inspect;
+                inspect.kind = CaptionPipelineEventKind::QualityInspected;
+                inspect.id = completion.id;
+                inspect.request_kind = kind(completion.id);
+                inspect.at_ms = now_ms;
+                inspect.queue_depth = queued_count();
+                fill_quality_event(inspect, scheduler_.find(completion.id.segment));
+                result.events.push_back(inspect);
+            } else {
+                const auto snap = composer_.snapshot();
+                const auto status = composer_.display_status(completion.id.segment);
+                const bool page_current =
+                    snap.key && *snap.key == completion.id.segment &&
+                    (!state->quality_page_publication ||
+                     (snap.publication == state->quality_page_publication &&
+                      snap.display.page_index == state->quality_page_index));
+                const uint64_t deadline = [&] {
+                    uint64_t value = state->quality_expires_ms;
+                    if (status && status->page_expires_ms) {
+                        if (value == 0) value = *status->page_expires_ms;
+                        else value = std::min(value, *status->page_expires_ms);
+                    }
+                    return value;
+                }();
+                const bool expired = deadline != 0 && now_ms >= deadline;
+                if (!quality_retry_) retry_outcome = QualityRetryOutcome::Disabled;
+                else if (!page_current) retry_outcome = QualityRetryOutcome::Superseded;
+                else if (expired) retry_outcome = QualityRetryOutcome::Expired;
+                else if (judgement.verdict == QualityVerdict::Suspected)
+                    retry_outcome = QualityRetryOutcome::StillSuspected;
+                else if (judgement.verdict == QualityVerdict::Indeterminate)
+                    retry_outcome = QualityRetryOutcome::Indeterminate;
+                else retry_outcome = QualityRetryOutcome::Accepted;
+                if (*retry_outcome != QualityRetryOutcome::Accepted) {
+                    effective.outcome = TranslationOutcome::Failed;
+                    effective.translated_text.clear();
+                }
+            }
+        } else if (quality_retry && (completed.accepted ||
+                                     completed.reject == SchedulerRejectReason::TranslationLimit ||
+                                     completed.reject == SchedulerRejectReason::InvalidUtf8 ||
+                                     completed.reject == SchedulerRejectReason::EmptyText)) {
+            retry_outcome = QualityRetryOutcome::HttpFailure;
+            effective.outcome = TranslationOutcome::Failed;
+            effective.translated_text.clear();
+        }
         const auto displayed = composer_.complete(effective, now_ms);
         compose_reject = displayed.reject;
         result.accepted = completed.accepted && displayed.accepted;
@@ -351,6 +506,8 @@ CaptionPipelineResult CaptionPipeline::complete(const TranslationCompletion &com
                 if (logical.segment.key == completion.id.segment)
                     logical.ready_ms = completion.completed_ms;
         display_events(displayed.events, now_ms, result);
+        if (!quality_retry && inspected)
+            maybe_reserve_quality(completion.id.segment, now_ms, result);
         if (completion.failure == TranslationFailure::Auth && completed.accepted && displayed.accepted)
             result.auth_error = true;
     }
@@ -366,6 +523,9 @@ CaptionPipelineResult CaptionPipeline::complete(const TranslationCompletion &com
     event.at_ms = now_ms;
     event.http_ms = elapsed(completion.started_ms, completion.completed_ms);
     event.queue_depth = queued_count();
+    event.retry_outcome = retry_outcome;
+    if (quality_retry) event.retry_http_ms = event.http_ms;
+    fill_quality_event(event, scheduler_.find(completion.id.segment));
     result.events.push_back(event);
     prune();
     return result;
@@ -376,7 +536,14 @@ CaptionPipelineResult CaptionPipeline::request_quality_retry(const SegmentKey &k
     CaptionPipelineResult result;
     const auto *state = scheduler_.find(key);
     if (!state) { result.accepted = false; return result; }
-    auto retry = scheduler_.request_quality_retry(key, context(state->segment), now_ms);
+    auto status = composer_.display_status(key);
+    const auto snap = composer_.snapshot();
+    const uint64_t publication = (snap.key && *snap.key == key) ? snap.publication : 0;
+    const size_t page_index = status ? status->page_index : 0;
+    const uint64_t expires = status && status->page_expires_ms ? *status->page_expires_ms : 0;
+    auto retry = scheduler_.request_quality_retry(key, context(state->segment), now_ms,
+                                                  state->quality_reason, publication, page_index,
+                                                  expires);
     result.accepted = retry.accepted;
     scheduler_effects(retry.effects, now_ms, result);
     if (retry.accepted)
@@ -392,6 +559,17 @@ CaptionPipelineFrame CaptionPipeline::tick(uint64_t now_ms)
     scheduler_effects(scheduler_.tick(now_ms), now_ms, frame.result);
     auto rendered = composer_.tick(now_ms);
     display_events(rendered.events, now_ms, frame.result);
+    if (rendered.snapshot.key) {
+        SchedulerEffects page_effects;
+        const auto expires = rendered.snapshot.display.page_expires_ms
+                                 ? *rendered.snapshot.display.page_expires_ms
+                                 : uint64_t{0};
+        scheduler_.note_display_page(*rendered.snapshot.key, rendered.snapshot.publication,
+                                     rendered.snapshot.display.page_index, expires, now_ms,
+                                     page_effects);
+        scheduler_effects(page_effects, now_ms, frame.result);
+        maybe_reserve_quality(*rendered.snapshot.key, now_ms, frame.result);
+    }
     frame.changed = rendered.changed;
     frame.snapshot = rendered.snapshot;
     prune();
